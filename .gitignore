@@ -1,0 +1,19 @@
+# Various
+.idea
+*.toml
+*.sum
+go.work
+artifacts/
+attachments/
+backup/
+.DS_Store
+.env
+repomix-output.*
+config
+sync
+target/
+
+# Cursor
+.specstory/.what-is-this.md
+.specstory/
+.cursorindexingignore

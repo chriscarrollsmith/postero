@@ -1,0 +1,22 @@
+{
+  "name": "zotero-postgrest-examples",
+  "version": "1.0.0",
+  "description": "Examples and testing utilities for ZoteroSync PostgREST API",
+  "main": "generate-jwt.js",
+  "scripts": {
+    "generate-jwt": "node generate-jwt.js",
+    "test-api": "./test-postgrest-api.sh"
+  },
+  "dependencies": {
+    "jsonwebtoken": "^9.0.2"
+  },
+  "keywords": [
+    "zotero",
+    "postgrest",
+    "api",
+    "jwt",
+    "testing"
+  ],
+  "author": "ZoteroSync",
+  "license": "ISC"
+} 

@@ -1,0 +1,48 @@
+services:
+  postgres:
+    image: postgres:latest
+    container_name: zotero_postgres
+    environment:
+      POSTGRES_DB: zotero
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-scripts:/docker-entrypoint-initdb.d
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:latest
+    container_name: zotero_minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    restart: unless-stopped
+
+  postgrest:
+    image: postgrest/postgrest:v12.2.0
+    container_name: zotero_postgrest
+    ports:
+      - "3000:3000"
+    environment:
+      PGRST_DB_URI: postgresql://postgres:postgres@postgres:5432/zotero
+      PGRST_DB_SCHEMAS: public
+      PGRST_DB_ANON_ROLE: api_anon
+      PGRST_JWT_SECRET: your-very-secure-and-long-jwt-secret-that-is-at-least-32-chars
+      PGRST_DB_CHANNEL_ENABLED: "true"
+      PGRST_OPENAPI_SERVER_PROXY_URI: http://localhost:3000
+    depends_on:
+      - postgres
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  minio_data: 
