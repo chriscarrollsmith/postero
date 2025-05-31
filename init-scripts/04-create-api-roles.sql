@@ -1,8 +1,19 @@
 -- Create API roles for PostgREST authentication and authorization
 
 -- Create roles for API access
-CREATE ROLE api_anon NOLOGIN;
-CREATE ROLE api_user NOLOGIN;
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'api_anon') THEN
+        CREATE ROLE api_anon NOLOGIN;
+    END IF;
+END$$;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'api_user') THEN
+        CREATE ROLE api_user NOLOGIN;
+    END IF;
+END$$;
 
 -- Grant basic connection privileges
 GRANT CONNECT ON DATABASE zotero TO api_anon;
@@ -72,5 +83,5 @@ COMMENT ON TABLE public.tags IS 'Stores tags associated with items in Zotero lib
 COMMENT ON COLUMN public.tags.tag IS 'The tag name/text';
 COMMENT ON COLUMN public.tags.library IS 'Library/group ID this tag belongs to';
 
-COMMENT ON VIEW public.collection_name_hier IS 'Hierarchical view of collections showing parent-child relationships and full paths';
-COMMENT ON VIEW public.item_type_hier IS 'Hierarchical view of items showing parent-child relationships and item types'; 
+COMMENT ON MATERIALIZED VIEW public.collection_name_hier IS 'Hierarchical view of collections showing parent-child relationships and full paths';
+COMMENT ON MATERIALIZED VIEW public.item_type_hier IS 'Hierarchical view of items showing parent-child relationships and item types'; 

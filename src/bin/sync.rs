@@ -144,13 +144,7 @@ async fn main() -> Result<()> {
     // Load configuration
     let config_file = matches.get_one::<String>("config")
         .map(|s| s.as_str())
-        .unwrap_or_else(|| {
-            if Path::new("zoterosync.toml").exists() {
-                "zoterosync.toml"
-            } else {
-                "postero.toml" // fallback
-            }
-        });
+        .unwrap_or("postero.toml");
 
     let mut config = Config::load(config_file)?;
 

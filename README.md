@@ -1,6 +1,6 @@
 # Postero - Rust Implementation
 
-A high-performance Rust rewrite of the ZoteroSync Go application, providing enhanced Zotero synchronization capabilities with PostgreSQL and PostgREST integration.
+A high-performance Zotero synchronization application with PostgreSQL and PostgREST integration.
 
 ## Features
 
@@ -43,6 +43,24 @@ git clone <repository>
 cd postero
 cargo build --release
 ```
+
+### Database Setup
+
+The application requires a PostgreSQL database. The `docker-compose.yml` file in the project root will set up a PostgreSQL container along with MinIO (for S3-compatible storage) and PostgREST.
+
+To initialize the database schema, services, and PostgREST interface, run the comprehensive setup script from the project root:
+
+```bash
+./setup-database.sh
+```
+
+This script handles:
+- Starting all Docker services (`postgres`, `minio`, `postgrest`).
+- Waiting for PostgreSQL to be ready.
+- Running all necessary database initialization scripts (creating extensions, enums, tables, materialized views, API roles, and views).
+- Verifying the database setup and PostgREST API availability.
+
+Alternatively, you can start the services with `docker compose up -d`, but running `./setup-database.sh` is recommended for a complete, first-time setup as it ensures all database objects and roles are correctly created.
 
 ### Dependencies
 
@@ -181,14 +199,6 @@ cargo clippy -- -D warnings
 cargo fmt
 ```
 
-### Database Setup
-
-The application expects the same PostgreSQL schema as the original Go version. Use the provided init scripts:
-
-```bash
-./setup-database.sh
-```
-
 ## Performance Considerations
 
 ### Async Operations
@@ -215,20 +225,6 @@ let groups = futures::future::join_all(futures).await;
 - Connection pooling via SQLx
 - Prepared statements for repeated queries
 - Batch operations for bulk inserts/updates
-
-## Migration from Go Version
-
-### Breaking Changes
-
-1. **Configuration**: Minor field name changes in TOML structure
-2. **Error Handling**: Different error types and handling patterns
-3. **Async API**: All operations are now async
-
-### Compatibility
-
-- Same database schema
-- Same S3 storage layout
-- Compatible with existing PostgREST setup
 
 ## Roadmap
 
@@ -260,11 +256,10 @@ The modular architecture supports easy extensions:
 
 ## License
 
-Same license as the original Go implementation.
+This project is licensed under the MIT License.
 
 ## Support
 
 For issues and questions:
-1. Check the GitHub issues
-2. Review the original Go documentation
-3. Consult the Zotero API documentation 
+1. Check the GitHub issues.
+2. Consult the Zotero API documentation. 

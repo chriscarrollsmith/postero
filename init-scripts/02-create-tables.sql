@@ -1,7 +1,7 @@
 -- Create main tables for Zotero sync
 
 -- Groups table
-CREATE TABLE public.groups (
+CREATE TABLE IF NOT EXISTS public.groups (
     id bigint PRIMARY KEY,
     version bigint DEFAULT 0 NOT NULL,
     created timestamp with time zone DEFAULT NOW(),
@@ -15,7 +15,7 @@ CREATE TABLE public.groups (
 );
 
 -- Items table
-CREATE TABLE public.items (
+CREATE TABLE IF NOT EXISTS public.items (
     key varchar(8) NOT NULL,
     version bigint DEFAULT 0 NOT NULL,
     library bigint NOT NULL,
@@ -31,8 +31,17 @@ CREATE TABLE public.items (
     FOREIGN KEY (library) REFERENCES public.groups(id)
 );
 
+-- Add sync column to items if it doesn't exist (in case it was dropped by enum CASCADE)
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                   WHERE table_name = 'items' AND column_name = 'sync' AND table_schema = 'public') THEN
+        ALTER TABLE public.items ADD COLUMN sync public.syncstatus DEFAULT 'new' NOT NULL;
+    END IF;
+END$$;
+
 -- Collections table
-CREATE TABLE public.collections (
+CREATE TABLE IF NOT EXISTS public.collections (
     key varchar(8) NOT NULL,
     version bigint DEFAULT 0 NOT NULL,
     library bigint NOT NULL,
@@ -46,8 +55,17 @@ CREATE TABLE public.collections (
     FOREIGN KEY (library) REFERENCES public.groups(id)
 );
 
+-- Add sync column to collections if it doesn't exist (in case it was dropped by enum CASCADE)
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                   WHERE table_name = 'collections' AND column_name = 'sync' AND table_schema = 'public') THEN
+        ALTER TABLE public.collections ADD COLUMN sync public.syncstatus DEFAULT 'new' NOT NULL;
+    END IF;
+END$$;
+
 -- Tags table
-CREATE TABLE public.tags (
+CREATE TABLE IF NOT EXISTS public.tags (
     tag varchar(255) NOT NULL,
     meta jsonb,
     library bigint NOT NULL,
@@ -56,7 +74,7 @@ CREATE TABLE public.tags (
 );
 
 -- Syncgroups table (control table)
-CREATE TABLE public.syncgroups (
+CREATE TABLE IF NOT EXISTS public.syncgroups (
     id bigint PRIMARY KEY,
     active boolean DEFAULT true NOT NULL,
     direction public.syncdirection DEFAULT 'none' NOT NULL,
@@ -64,19 +82,31 @@ CREATE TABLE public.syncgroups (
     FOREIGN KEY (id) REFERENCES public.groups(id)
 );
 
--- Create indexes for better performance
-CREATE INDEX idx_items_library ON public.items(library);
-CREATE INDEX idx_items_sync ON public.items(sync);
-CREATE INDEX idx_items_deleted ON public.items(deleted);
+-- Add direction column to syncgroups if it doesn't exist (in case it was dropped by enum CASCADE)
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                   WHERE table_name = 'syncgroups' AND column_name = 'direction' AND table_schema = 'public') THEN
+        ALTER TABLE public.syncgroups ADD COLUMN direction public.syncdirection DEFAULT 'none' NOT NULL;
+    END IF;
+END$$;
 
-CREATE INDEX idx_collections_library ON public.collections(library);
-CREATE INDEX idx_collections_sync ON public.collections(sync);
-CREATE INDEX idx_collections_deleted ON public.collections(deleted);
-CREATE INDEX idx_tags_library ON public.tags(library);
+-- Create indexes for better performance
+CREATE INDEX IF NOT EXISTS idx_items_library ON public.items(library);
+CREATE INDEX IF NOT EXISTS idx_items_sync ON public.items(sync);
+CREATE INDEX IF NOT EXISTS idx_items_deleted ON public.items(deleted);
+
+CREATE INDEX IF NOT EXISTS idx_collections_library ON public.collections(library);
+CREATE INDEX IF NOT EXISTS idx_collections_sync ON public.collections(sync);
+CREATE INDEX IF NOT EXISTS idx_collections_deleted ON public.collections(deleted);
+CREATE INDEX IF NOT EXISTS idx_tags_library ON public.tags(library);
 
 
 
 -- Create constraint name referenced in Go code for tags
+-- Drop the constraint first if it exists, then add it.
+-- This assumes the constraint name is unique enough not to cause issues if dropped.
+ALTER TABLE public.tags DROP CONSTRAINT IF EXISTS pk_tags;
 ALTER TABLE public.tags ADD CONSTRAINT pk_tags UNIQUE (tag, library);
 
 -- Consider adding these for better query performance:

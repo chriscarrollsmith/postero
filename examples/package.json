@@ -1,7 +1,7 @@
 {
-  "name": "zotero-postgrest-examples",
+  "name": "postero-postgrest-examples",
   "version": "1.0.0",
-  "description": "Examples and testing utilities for ZoteroSync PostgREST API",
+  "description": "Examples and testing utilities for Postero PostgREST API",
   "main": "generate-jwt.js",
   "scripts": {
     "generate-jwt": "node generate-jwt.js",
@@ -17,6 +17,6 @@
     "jwt",
     "testing"
   ],
-  "author": "ZoteroSync",
+  "author": "Christopher C. Smith",
   "license": "ISC"
 } 

@@ -8,6 +8,7 @@ ALTER TABLE public.groups ENABLE ROW LEVEL SECURITY;
 
 -- Create RLS policies for items table
 -- Policy: Users can only access items belonging to their group_id
+DROP POLICY IF EXISTS items_group_isolation ON public.items;
 CREATE POLICY items_group_isolation
 ON public.items
 FOR ALL
@@ -20,6 +21,7 @@ USING (
 );
 
 -- Allow anonymous users to see items if group_id is explicitly provided and permitted
+DROP POLICY IF EXISTS items_anon_access ON public.items;
 CREATE POLICY items_anon_access
 ON public.items
 FOR SELECT
@@ -33,6 +35,7 @@ USING (
 );
 
 -- Create RLS policies for collections table
+DROP POLICY IF EXISTS collections_group_isolation ON public.collections;
 CREATE POLICY collections_group_isolation
 ON public.collections
 FOR ALL
@@ -44,6 +47,7 @@ USING (
     )
 );
 
+DROP POLICY IF EXISTS collections_anon_access ON public.collections;
 CREATE POLICY collections_anon_access
 ON public.collections
 FOR SELECT
@@ -57,6 +61,7 @@ USING (
 );
 
 -- Create RLS policies for tags table
+DROP POLICY IF EXISTS tags_group_isolation ON public.tags;
 CREATE POLICY tags_group_isolation
 ON public.tags
 FOR ALL
@@ -68,6 +73,7 @@ USING (
     )
 );
 
+DROP POLICY IF EXISTS tags_anon_access ON public.tags;
 CREATE POLICY tags_anon_access
 ON public.tags
 FOR SELECT
@@ -80,6 +86,7 @@ USING (
 );
 
 -- Create RLS policies for groups table
+DROP POLICY IF EXISTS groups_access ON public.groups;
 CREATE POLICY groups_access
 ON public.groups
 FOR SELECT
@@ -92,6 +99,7 @@ USING (
 );
 
 -- Allow api_user to modify their own group
+DROP POLICY IF EXISTS groups_modify ON public.groups;
 CREATE POLICY groups_modify
 ON public.groups
 FOR UPDATE
@@ -135,6 +143,7 @@ $$ LANGUAGE plpgsql SECURITY DEFINER;
 
 -- Alternative RLS policies using app-level group context
 -- These can be used if JWT claims are not available
+DROP POLICY IF EXISTS items_app_context ON public.items;
 CREATE POLICY items_app_context
 ON public.items
 FOR ALL
