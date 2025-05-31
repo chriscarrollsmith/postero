@@ -147,7 +147,8 @@ impl ZoteroClient {
         let row = sqlx::query(&query)
             .bind(group_id)
             .fetch_one(&self.db)
-            .await?;
+            .await
+            .map_err(Error::from_sqlx_error)?;
 
         Group::from_row(&row)
     }
@@ -207,7 +208,7 @@ impl ZoteroClient {
         let syncgroups_query = format!(
             r#"
             INSERT INTO {}.syncgroups (id, active, direction, tags)
-            VALUES ($1, $2, $3, false)
+            VALUES ($1, $2, $3::syncdirection, false)
             ON CONFLICT (id) DO UPDATE SET
                 active = EXCLUDED.active,
                 direction = EXCLUDED.direction

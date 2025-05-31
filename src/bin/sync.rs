@@ -6,7 +6,6 @@ use postero::{
 };
 use clap::{Arg, Command};
 use sqlx::PgPool;
-use std::path::Path;
 use std::sync::Arc;
 use tracing::{info, error};
 use tracing_subscriber;

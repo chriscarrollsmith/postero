@@ -20,13 +20,15 @@ A high-performance Zotero synchronization application with PostgreSQL and PostgR
 - **`postero::filesystem`**: Async filesystem abstraction with S3 implementation
 - **`postero::zotero`**: Zotero API client and data models
 
-### Key Improvements over Go Version
+### Dependencies
 
-1. **Memory Safety**: Rust's ownership system prevents common memory bugs
-2. **Type Safety**: Strong type system catches errors at compile time
-3. **Performance**: Zero-cost abstractions and efficient async runtime
-4. **Error Handling**: Explicit error handling with `Result<T, E>` types
-5. **Concurrency**: Built-in async/await support with proper cancellation
+Key dependencies include:
+- `tokio`: Async runtime
+- `sqlx`: Type-safe SQL toolkit
+- `reqwest`: HTTP client for Zotero API
+- `serde`: Serialization framework
+- `aws-sdk-s3`: S3 client for storage
+- `tracing`: Structured logging
 
 ## Installation
 
@@ -46,31 +48,17 @@ cargo build --release
 
 ### Database Setup
 
-The application requires a PostgreSQL database. The `docker-compose.yml` file in the project root will set up a PostgreSQL container along with MinIO (for S3-compatible storage) and PostgREST.
-
-To initialize the database schema, services, and PostgREST interface, run the comprehensive setup script from the project root:
+The application requires a PostgreSQL database. To initialize the database schema, services, and PostgREST interface, run the comprehensive setup script from the project root:
 
 ```bash
 ./setup-database.sh
 ```
 
 This script handles:
-- Starting all Docker services (`postgres`, `minio`, `postgrest`).
+- Starting all Docker services (`postgres`, `minio`, and `postgrest`) by calling `docker compose`.
 - Waiting for PostgreSQL to be ready.
 - Running all necessary database initialization scripts (creating extensions, enums, tables, materialized views, API roles, and views).
 - Verifying the database setup and PostgREST API availability.
-
-Alternatively, you can start the services with `docker compose up -d`, but running `./setup-database.sh` is recommended for a complete, first-time setup as it ensures all database objects and roles are correctly created.
-
-### Dependencies
-
-Key dependencies include:
-- `tokio`: Async runtime
-- `sqlx`: Type-safe SQL toolkit
-- `reqwest`: HTTP client for Zotero API
-- `serde`: Serialization framework
-- `aws-sdk-s3`: S3 client for storage
-- `tracing`: Structured logging
 
 ## Configuration
 

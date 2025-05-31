@@ -20,10 +20,14 @@ pub struct ApiKeyAccess {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiKeyUserAccess {
-    pub library: bool,
-    pub files: bool,
-    pub notes: bool,
-    pub write: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub library: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub files: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notes: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub write: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
