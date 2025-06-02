@@ -1,6 +1,21 @@
 use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
 
+// Custom deserializer for parent_collection that handles boolean false
+fn deserialize_parent_collection<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value: serde_json::Value = Deserialize::deserialize(deserializer)?;
+    
+    match value {
+        serde_json::Value::Bool(false) => Ok(None),
+        serde_json::Value::String(s) => Ok(Some(s)),
+        serde_json::Value::Null => Ok(None),
+        _ => Ok(None),
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiKey {
     pub key: String,
@@ -93,10 +108,62 @@ pub struct CollectionData {
     pub key: String,
     pub version: i64,
     pub name: String,
-    #[serde(rename = "parentCollection", skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "parentCollection", skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_parent_collection")]
     pub parent_collection: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub relations: Option<serde_json::Value>,
+}
+
+// API response structure for collections from Zotero
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CollectionApiResponse {
+    pub key: String,
+    pub version: i64,
+    pub library: LibraryInfo,
+    pub links: serde_json::Value,
+    pub meta: CollectionMeta,
+    pub data: CollectionData,
+}
+
+// API response structure for items from Zotero
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ItemApiResponse {
+    pub key: String,
+    pub version: i64,
+    pub library: LibraryInfo,
+    pub links: serde_json::Value,
+    pub meta: ItemMeta,
+    pub data: ItemData,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ItemMeta {
+    #[serde(rename = "createdByUser")]
+    pub created_by_user: Option<UserData>,
+    #[serde(rename = "creatorSummary")]
+    pub creator_summary: Option<String>,
+    #[serde(rename = "parsedDate")]
+    pub parsed_date: Option<String>,
+    #[serde(rename = "numChildren")]
+    pub num_children: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LibraryInfo {
+    #[serde(rename = "type")]
+    pub library_type: String,
+    pub id: i64,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub links: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CollectionMeta {
+    #[serde(rename = "numCollections")]
+    pub num_collections: i32,
+    #[serde(rename = "numItems")]
+    pub num_items: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -145,13 +212,6 @@ pub struct UserData {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Tag {
     pub data: TagData,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Deletions {
-    pub collections: Vec<String>,
-    pub items: Vec<String>,
-    pub tags: Vec<String>,
 }
 
 #[derive(Debug, Clone)]

@@ -1,5 +1,4 @@
 use async_trait::async_trait;
-use aws_config::meta::region::RegionProviderChain;
 use aws_sdk_s3::{Client, primitives::ByteStream};
 use crate::{Error, Result};
 use super::{FileSystem, FilePutOptions, FileGetOptions, FileStatOptions, FolderCreateOptions, FileInfo};
@@ -13,10 +12,15 @@ pub struct S3FileSystem {
 
 impl S3FileSystem {
     pub async fn new(endpoint: &str, access_key_id: &str, secret_access_key: &str, use_ssl: bool) -> Result<Self> {
-        let region_provider = RegionProviderChain::default_provider().or_else("us-east-1");
+        // Set environment variables to disable IMDS and avoid network calls
+        std::env::set_var("AWS_EC2_METADATA_DISABLED", "true");
+        std::env::set_var("AWS_DEFAULT_REGION", "us-east-1");
+        
+        // Explicitly set region
+        let region = aws_config::Region::new("us-east-1");
         
         let mut config_builder = aws_config::defaults(aws_config::BehaviorVersion::latest())
-            .region(region_provider)
+            .region(region)
             .credentials_provider(aws_sdk_s3::config::Credentials::new(
                 access_key_id,
                 secret_access_key,

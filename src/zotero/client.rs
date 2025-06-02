@@ -1366,6 +1366,8 @@ impl ZoteroClient {
     pub async fn get_collections_version_cloud_unified(&self, library_id: i64, library_type: LibraryType, since_version: i64) -> Result<(std::collections::HashMap<String, i64>, i64)> {
         let url = self.build_library_url(library_id, library_type, "collections")?;
         
+        tracing::info!("Calling collections versions API: {} with since={}", url, since_version);
+        
         let response = self.client
             .get(url)
             .query(&[("format", "versions"), ("since", &since_version.to_string())])
@@ -1373,6 +1375,7 @@ impl ZoteroClient {
             .await?;
 
         if !response.status().is_success() {
+            tracing::error!("Collections versions API failed with status: {}", response.status());
             return Err(Error::Api {
                 code: response.status().as_u16(),
                 message: response.text().await.unwrap_or_default(),
@@ -1386,8 +1389,28 @@ impl ZoteroClient {
             .and_then(|s| s.parse().ok())
             .unwrap_or(since_version);
 
-        let versions: std::collections::HashMap<String, i64> = response.json().await?;
-        Ok((versions, last_modified_version))
+        // Get the raw response text for debugging
+        let response_text = response.text().await?;
+        tracing::info!("Collections versions API response (first 500 chars): {}", 
+            if response_text.len() > 500 { 
+                format!("{}...", &response_text[..500]) 
+            } else { 
+                response_text.clone() 
+            }
+        );
+
+        // Try to deserialize and log any errors
+        match serde_json::from_str::<std::collections::HashMap<String, i64>>(&response_text) {
+            Ok(versions) => {
+                tracing::info!("Successfully parsed collections versions: {} collections", versions.len());
+                Ok((versions, last_modified_version))
+            }
+            Err(e) => {
+                tracing::error!("Failed to deserialize collections versions response: {}", e);
+                tracing::error!("Full response text: {}", response_text);
+                Err(Error::InvalidData(format!("Failed to parse collections versions: {}", e)))
+            }
+        }
     }
 
     pub async fn get_collections_cloud_unified(&self, library_id: i64, library_type: LibraryType, collection_keys: &[String]) -> Result<(Vec<super::Collection>, i64)> {
@@ -1398,6 +1421,8 @@ impl ZoteroClient {
         let url = self.build_library_url(library_id, library_type, "collections")?;
         let keys = collection_keys.join(",");
         
+        tracing::info!("Calling collections data API: {} with keys={}", url, keys);
+        
         let response = self.client
             .get(url)
             .query(&[("collectionKey", &keys)])
@@ -1405,6 +1430,7 @@ impl ZoteroClient {
             .await?;
 
         if !response.status().is_success() {
+            tracing::error!("Collections data API failed with status: {}", response.status());
             return Err(Error::Api {
                 code: response.status().as_u16(),
                 message: response.text().await.unwrap_or_default(),
@@ -1418,8 +1444,57 @@ impl ZoteroClient {
             .and_then(|s| s.parse().ok())
             .unwrap_or(0);
 
-        let collections: Vec<super::Collection> = response.json().await?;
-        Ok((collections, last_modified_version))
+        // Get the raw response text for debugging
+        let response_text = response.text().await?;
+        tracing::info!("Collections data API response (first 1000 chars): {}", 
+            if response_text.len() > 1000 { 
+                format!("{}...", &response_text[..1000]) 
+            } else { 
+                response_text.clone() 
+            }
+        );
+
+        // Try to deserialize and log any errors
+        match serde_json::from_str::<Vec<super::CollectionApiResponse>>(&response_text) {
+            Ok(api_collections) => {
+                tracing::info!("Successfully parsed collections API response: {} collections", api_collections.len());
+                
+                // Convert API response to internal Collection structs
+                let mut collections = Vec::new();
+                for api_collection in api_collections {
+                    let library_type = match api_collection.library.library_type.as_str() {
+                        "user" => super::LibraryType::User,
+                        "group" => super::LibraryType::Group,
+                        _ => super::LibraryType::Group, // Default fallback
+                    };
+                    
+                    let collection = super::Collection {
+                        key: api_collection.key,
+                        version: api_collection.version,
+                        library_id: api_collection.library.id,
+                        library_type,
+                        data: api_collection.data,
+                        meta: Some(super::collection::CollectionMeta {
+                            num_collections: api_collection.meta.num_collections,
+                            num_items: api_collection.meta.num_items,
+                        }),
+                        deleted: false,
+                        sync_status: super::SyncStatus::Synced,
+                        db: None,
+                        db_schema: None,
+                    };
+                    collections.push(collection);
+                }
+                
+                tracing::info!("Successfully converted to internal collections: {} collections", collections.len());
+                Ok((collections, last_modified_version))
+            }
+            Err(e) => {
+                tracing::error!("Failed to deserialize collections data response: {}", e);
+                tracing::error!("Full response text: {}", response_text);
+                Err(Error::InvalidData(format!("Failed to parse collections data: {}", e)))
+            }
+        }
     }
 
     pub async fn get_items_version_cloud_unified(&self, library_id: i64, library_type: LibraryType, since_version: i64, trashed: bool) -> Result<(std::collections::HashMap<String, i64>, i64)> {
@@ -1479,8 +1554,51 @@ impl ZoteroClient {
             });
         }
 
-        let items: Vec<super::Item> = response.json().await?;
-        Ok(items)
+        // Get the raw response text for debugging
+        let response_text = response.text().await?;
+        
+        // Try to deserialize and log any errors
+        match serde_json::from_str::<Vec<super::ItemApiResponse>>(&response_text) {
+            Ok(api_items) => {
+                // Convert API response to internal Item structs
+                let mut items = Vec::new();
+                for api_item in api_items {
+                    let library_type = match api_item.library.library_type.as_str() {
+                        "user" => super::LibraryType::User,
+                        "group" => super::LibraryType::Group,
+                        _ => super::LibraryType::Group, // Default fallback
+                    };
+                    
+                    let item = super::Item {
+                        key: api_item.key,
+                        version: api_item.version,
+                        library_id: api_item.library.id,
+                        library_type,
+                        data: api_item.data,
+                        meta: Some(super::item::ItemMeta {
+                            created_by_user: api_item.meta.created_by_user,
+                            creator_summary: api_item.meta.creator_summary,
+                            parsed_date: api_item.meta.parsed_date,
+                            num_children: api_item.meta.num_children,
+                        }),
+                        trashed: false, // Will be set based on API data if needed
+                        deleted: false,
+                        sync_status: super::SyncStatus::Synced,
+                        md5: None, // Will be extracted from data if it's an attachment
+                        db: None,
+                        db_schema: None,
+                    };
+                    items.push(item);
+                }
+                
+                Ok(items)
+            }
+            Err(e) => {
+                tracing::error!("Failed to deserialize items response: {}", e);
+                tracing::error!("Full response text: {}", response_text);
+                Err(Error::InvalidData(format!("Failed to parse items: {}", e)))
+            }
+        }
     }
 
     pub async fn get_tags_cloud_unified(&self, library_id: i64, library_type: LibraryType, since_version: i64) -> Result<(Vec<super::Tag>, i64)> {
@@ -1513,6 +1631,8 @@ impl ZoteroClient {
     pub async fn get_deletions_cloud_unified(&self, library_id: i64, library_type: LibraryType, since_version: i64) -> Result<(super::Deletions, i64)> {
         let url = self.build_library_url(library_id, library_type, "deleted")?;
         
+        tracing::info!("Calling deletions API: {} with since={}", url, since_version);
+        
         let response = self.client
             .get(url)
             .query(&[("since", &since_version.to_string())])
@@ -1520,6 +1640,7 @@ impl ZoteroClient {
             .await?;
 
         if !response.status().is_success() {
+            tracing::error!("Deletions API failed with status: {}", response.status());
             return Err(Error::Api {
                 code: response.status().as_u16(),
                 message: response.text().await.unwrap_or_default(),
@@ -1533,7 +1654,28 @@ impl ZoteroClient {
             .and_then(|s| s.parse().ok())
             .unwrap_or(since_version);
 
-        let deletions: super::Deletions = response.json().await?;
-        Ok((deletions, last_modified_version))
+        // Get the raw response text for debugging
+        let response_text = response.text().await?;
+        tracing::info!("Deletions API response (first 500 chars): {}", 
+            if response_text.len() > 500 { 
+                format!("{}...", &response_text[..500]) 
+            } else { 
+                response_text.clone() 
+            }
+        );
+
+        // Try to deserialize and log any errors
+        match serde_json::from_str::<super::Deletions>(&response_text) {
+            Ok(deletions) => {
+                tracing::info!("Successfully parsed deletions: {} collections, {} items, {} tags", 
+                    deletions.collections.len(), deletions.items.len(), deletions.tags.len());
+                Ok((deletions, last_modified_version))
+            }
+            Err(e) => {
+                tracing::error!("Failed to deserialize deletions response: {}", e);
+                tracing::error!("Full response text: {}", response_text);
+                Err(Error::InvalidData(format!("Failed to parse deletions: {}", e)))
+            }
+        }
     }
 } 

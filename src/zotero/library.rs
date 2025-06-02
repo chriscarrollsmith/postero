@@ -305,22 +305,32 @@ impl Library {
         tracing::info!("Starting sync for {} library {}", self.library_type, self.id);
 
         // Sync collections
+        tracing::info!("Starting sync_collections for {} library {}", self.library_type, self.id);
         let (_, collection_version) = self.sync_collections().await?;
+        tracing::info!("Completed sync_collections for {} library {}", self.library_type, self.id);
         
         // Upload modified items
+        tracing::info!("Starting upload_items for {} library {}", self.library_type, self.id);
         let (_, _item_version) = self.upload_items().await?;
+        tracing::info!("Completed upload_items for {} library {}", self.library_type, self.id);
         
         // Download items from cloud
+        tracing::info!("Starting download_items for {} library {}", self.library_type, self.id);
         let (_, item_version) = self.download_items().await?;
+        tracing::info!("Completed download_items for {} library {}", self.library_type, self.id);
         
         // Sync tags
         if self.sync_tags {
+            tracing::info!("Starting sync_tags for {} library {}", self.library_type, self.id);
             let (_, tag_version) = self.sync_tags().await?;
             self.tag_version = tag_version;
+            tracing::info!("Completed sync_tags for {} library {}", self.library_type, self.id);
         }
 
         // Sync deleted items
+        tracing::info!("Starting sync_deleted for {} library {}", self.library_type, self.id);
         let _deleted_version = self.sync_deleted().await?;
+        tracing::info!("Completed sync_deleted for {} library {}", self.library_type, self.id);
 
         // Update local versions
         self.item_version = item_version;
@@ -533,6 +543,8 @@ impl Library {
 
         let client = self.client.as_ref().ok_or_else(|| Error::InvalidData("Client not set".to_string()))?;
         
+        tracing::info!("Starting sync_deleted for {} library {}", self.library_type, self.id);
+        
         let (deletions, last_modified_version) = client.get_deletions_cloud_unified(self.id, self.library_type, self.version).await?;
         
         let mut counter = 0i64;
@@ -554,6 +566,9 @@ impl Library {
             self.delete_tag_local(&tag_name).await?;
             counter += 1;
         }
+
+        tracing::info!("Completed sync_deleted for {} library {}, processed {} deletions", 
+            self.library_type, self.id, counter);
 
         Ok(counter)
     }
@@ -667,9 +682,9 @@ impl Library {
         let db = self.db.as_ref().ok_or_else(|| Error::InvalidData("Database not set".to_string()))?;
         let schema = self.db_schema.as_ref().ok_or_else(|| Error::InvalidData("Schema not set".to_string()))?;
 
-        let data_json = serde_json::to_string(&collection.data)?;
-        let meta_json = collection.meta.as_ref()
-            .map(|m| serde_json::to_string(m))
+        let data_value = serde_json::to_value(&collection.data)?;
+        let meta_value = collection.meta.as_ref()
+            .map(|m| serde_json::to_value(m))
             .transpose()?;
 
         let query = format!(
@@ -691,10 +706,10 @@ impl Library {
             .bind(collection.version)
             .bind(self.id)
             .bind(self.library_type)
-            .bind(&data_json)
-            .bind(&meta_json)
+            .bind(&data_value)
+            .bind(&meta_value)
             .bind(collection.deleted)
-            .bind("synced")
+            .bind(super::SyncStatus::Synced)
             .execute(db)
             .await?;
 
@@ -705,9 +720,9 @@ impl Library {
         let db = self.db.as_ref().ok_or_else(|| Error::InvalidData("Database not set".to_string()))?;
         let schema = self.db_schema.as_ref().ok_or_else(|| Error::InvalidData("Schema not set".to_string()))?;
 
-        let data_json = serde_json::to_string(&item.data)?;
-        let meta_json = item.meta.as_ref()
-            .map(|m| serde_json::to_string(m))
+        let data_value = serde_json::to_value(&item.data)?;
+        let meta_value = item.meta.as_ref()
+            .map(|m| serde_json::to_value(m))
             .transpose()?;
 
         let query = format!(
@@ -731,11 +746,11 @@ impl Library {
             .bind(item.version)
             .bind(self.id)
             .bind(self.library_type)
-            .bind(&data_json)
-            .bind(&meta_json)
+            .bind(&data_value)
+            .bind(&meta_value)
             .bind(item.trashed)
             .bind(item.deleted)
-            .bind("synced")
+            .bind(super::SyncStatus::Synced)
             .bind(&item.md5)
             .execute(db)
             .await?;
@@ -752,7 +767,7 @@ impl Library {
             tag_type: tag.data.tag_type.unwrap_or(0) as i64,
             num_items: 0, // This would be updated elsewhere
         };
-        let meta_json = serde_json::to_string(&tag_meta)?;
+        let meta_value = serde_json::to_value(&tag_meta)?;
 
         let query = format!(
             r#"
@@ -766,7 +781,7 @@ impl Library {
 
         sqlx::query(&query)
             .bind(&tag.data.tag)
-            .bind(&meta_json)
+            .bind(&meta_value)
             .bind(self.id)
             .bind(self.library_type)
             .execute(db)

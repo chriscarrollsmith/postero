@@ -42,7 +42,7 @@ async fn sync_data(
             all_library_ids.push(user_library_id);
             
             // Try to load user library locally, create if doesn't exist
-            let user_library = match zotero.load_user_local(user_library_id).await {
+            let _user_library = match zotero.load_user_local(user_library_id).await {
                 Ok(mut library) => {
                     if !library.active {
                         info!("Ignoring inactive user library #{}", user_library_id);

@@ -61,7 +61,9 @@ impl Default for SyncDirection {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
+#[sqlx(type_name = "syncstatus")]
+#[sqlx(rename_all = "lowercase")]
 pub enum SyncStatus {
     #[serde(rename = "new")]
     New,
