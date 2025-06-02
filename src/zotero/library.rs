@@ -2,35 +2,36 @@ use serde::{Deserialize, Serialize};
 use sqlx::{Row, PgPool};
 use chrono::{DateTime, Utc};
 use crate::{Result, Error};
-use super::{SyncDirection, GroupData, ZoteroClient};
+use super::{SyncDirection, LibraryType, GroupData, UserData, ZoteroClient};
 use crate::filesystem::FileSystem;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Group {
-    // Fields from groups table
+pub struct Library {
+    // Fields from libraries table
     pub id: i64,
+    pub library_type: LibraryType,
     pub version: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub created: Option<DateTime<Utc>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub modified: Option<DateTime<Utc>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub data: Option<GroupData>, // JSONB column
+    pub data: Option<serde_json::Value>, // JSONB column - can be GroupData or UserData
     pub deleted: bool,
     pub item_version: i64,
     pub collection_version: i64,
     pub tag_version: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gitlab: Option<DateTime<Utc>>,
-    
-    // Fields from syncgroups table
+
+    // Fields from sync_libraries table
     pub active: bool,
     pub sync_direction: SyncDirection,
     pub sync_tags: bool,
-    
+
     // Computed/helper fields
     pub is_modified: bool,
-    
+
     // Add reference to client for sync operations
     #[serde(skip)]
     pub client: Option<std::sync::Arc<ZoteroClient>>,
@@ -42,35 +43,25 @@ pub struct Group {
     pub filesystem: Option<std::sync::Arc<dyn FileSystem>>,
 }
 
-impl Group {
+impl Library {
     pub fn from_row(row: &sqlx::postgres::PgRow) -> Result<Self> {
         // Parse the data JSONB column
         let data_json = row.try_get::<Option<serde_json::Value>, &str>("data")?;
-        let data = match data_json {
-            Some(json) => Some(serde_json::from_value(json)?),
-            None => None,
-        };
 
         Ok(Self {
             id: row.try_get("id")?,
+            library_type: row.try_get("library_type")?,
             version: row.try_get("version")?,
             created: row.try_get("created")?,
             modified: row.try_get("modified")?,
-            data,
+            data: data_json,
             deleted: row.try_get("deleted")?,
-            item_version: row.try_get("itemversion")?,
-            collection_version: row.try_get("collectionversion")?,
-            tag_version: row.try_get("tagversion")?,
+            item_version: row.try_get("item_version")?,
+            collection_version: row.try_get("collection_version")?,
+            tag_version: row.try_get("tag_version")?,
             gitlab: row.try_get("gitlab")?,
             active: row.try_get("active")?,
-            sync_direction: match row.try_get::<&str, &str>("direction")? {
-                "tocloud" => SyncDirection::ToCloud,
-                "tolocal" => SyncDirection::ToLocal,
-                "bothcloud" => SyncDirection::BothCloud,
-                "bothlocal" => SyncDirection::BothLocal,
-                "bothmanual" => SyncDirection::BothManual,
-                _ => SyncDirection::None,
-            },
+            sync_direction: row.try_get("direction")?,
             sync_tags: row.try_get("tags")?,
             is_modified: false,
             client: None,
@@ -83,10 +74,35 @@ impl Group {
     pub fn from_group_data(data: &GroupData) -> Self {
         Self {
             id: data.id,
+            library_type: LibraryType::Group,
             version: data.version,
             created: None,
             modified: None,
-            data: Some(data.clone()),
+            data: Some(serde_json::to_value(data).unwrap()),
+            deleted: false,
+            item_version: 0,
+            collection_version: 0,
+            tag_version: 0,
+            gitlab: None,
+            active: true,
+            sync_direction: SyncDirection::ToLocal,
+            sync_tags: false,
+            is_modified: false,
+            client: None,
+            db: None,
+            db_schema: None,
+            filesystem: None,
+        }
+    }
+
+    pub fn from_user_data(data: &UserData) -> Self {
+        Self {
+            id: data.id,
+            library_type: LibraryType::User,
+            version: 0, // User libraries don't have versions in the same way
+            created: None,
+            modified: None,
+            data: Some(serde_json::to_value(data).unwrap()),
             deleted: false,
             item_version: 0,
             collection_version: 0,
@@ -105,31 +121,91 @@ impl Group {
 
     // Helper methods to access data fields easily
     pub fn name(&self) -> &str {
-        self.data.as_ref().map(|d| d.name.as_str()).unwrap_or("")
+        match self.library_type {
+            LibraryType::Group => {
+                self.data.as_ref()
+                    .and_then(|d| d.get("name"))
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("")
+            }
+            LibraryType::User => {
+                self.data.as_ref()
+                    .and_then(|d| d.get("displayName"))
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("")
+            }
+        }
     }
 
     pub fn description(&self) -> Option<&str> {
-        self.data.as_ref().and_then(|d| d.description.as_deref())
+        match self.library_type {
+            LibraryType::Group => {
+                self.data.as_ref()
+                    .and_then(|d| d.get("description"))
+                    .and_then(|desc| desc.as_str())
+            }
+            LibraryType::User => None, // Users don't have descriptions
+        }
     }
 
     pub fn owner(&self) -> i64 {
-        self.data.as_ref().map(|d| d.owner).unwrap_or(0)
+        match self.library_type {
+            LibraryType::Group => {
+                self.data.as_ref()
+                    .and_then(|d| d.get("owner"))
+                    .and_then(|o| o.as_i64())
+                    .unwrap_or(0)
+            }
+            LibraryType::User => self.id, // User owns their own library
+        }
     }
 
     pub fn group_type(&self) -> &str {
-        self.data.as_ref().map(|d| d.group_type.as_str()).unwrap_or("")
+        match self.library_type {
+            LibraryType::Group => {
+                self.data.as_ref()
+                    .and_then(|d| d.get("type"))
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("")
+            }
+            LibraryType::User => "user", // Not really applicable for users
+        }
     }
 
     pub fn library_reading(&self) -> &str {
-        self.data.as_ref().map(|d| d.library_reading.as_str()).unwrap_or("")
+        match self.library_type {
+            LibraryType::Group => {
+                self.data.as_ref()
+                    .and_then(|d| d.get("libraryReading"))
+                    .and_then(|lr| lr.as_str())
+                    .unwrap_or("public")
+            }
+            LibraryType::User => "private", // User libraries are private by default
+        }
     }
 
     pub fn library_editing(&self) -> &str {
-        self.data.as_ref().map(|d| d.library_editing.as_str()).unwrap_or("")
+        match self.library_type {
+            LibraryType::Group => {
+                self.data.as_ref()
+                    .and_then(|d| d.get("libraryEditing"))
+                    .and_then(|le| le.as_str())
+                    .unwrap_or("")
+            }
+            LibraryType::User => "owner", // User can edit their own library
+        }
     }
 
     pub fn file_editing(&self) -> &str {
-        self.data.as_ref().map(|d| d.file_editing.as_str()).unwrap_or("")
+        match self.library_type {
+            LibraryType::Group => {
+                self.data.as_ref()
+                    .and_then(|d| d.get("fileEditing"))
+                    .and_then(|fe| fe.as_str())
+                    .unwrap_or("")
+            }
+            LibraryType::User => "owner", // User can edit files in their own library
+        }
     }
 
     pub fn set_client(&mut self, client: std::sync::Arc<ZoteroClient>, db: PgPool, db_schema: String, filesystem: std::sync::Arc<dyn FileSystem>) {
@@ -149,28 +225,68 @@ impl Group {
             SyncDirection::ToLocal | SyncDirection::BothCloud | SyncDirection::BothLocal | SyncDirection::BothManual)
     }
 
+    pub fn build_items_url(&self) -> String {
+        match self.library_type {
+            LibraryType::User => format!("users/{}/items", self.id),
+            LibraryType::Group => format!("groups/{}/items", self.id),
+        }
+    }
+
+    pub fn build_collections_url(&self) -> String {
+        match self.library_type {
+            LibraryType::User => format!("users/{}/collections", self.id),
+            LibraryType::Group => format!("groups/{}/collections", self.id),
+        }
+    }
+
+    pub fn build_tags_url(&self) -> String {
+        match self.library_type {
+            LibraryType::User => format!("users/{}/tags", self.id),
+            LibraryType::Group => format!("groups/{}/tags", self.id),
+        }
+    }
+
+    pub fn build_deleted_url(&self) -> String {
+        match self.library_type {
+            LibraryType::User => format!("users/{}/deleted", self.id),
+            LibraryType::Group => format!("groups/{}/deleted", self.id),
+        }
+    }
+
     pub async fn clear_local(&mut self) -> Result<()> {
         let db = self.db.as_ref().ok_or_else(|| Error::InvalidData("Database not set".to_string()))?;
         let schema = self.db_schema.as_ref().ok_or_else(|| Error::InvalidData("Schema not set".to_string()))?;
 
-        // Clear group versions
+        // Clear library versions
         let query = format!(
-            "UPDATE {}.groups SET version=0, itemversion=0, collectionversion=0, tagversion=0 WHERE id=$1",
+            "UPDATE {}.libraries SET version=0, item_version=0, collection_version=0, tag_version=0 WHERE id=$1 AND library_type=$2",
             schema
         );
-        sqlx::query(&query).bind(self.id).execute(db).await?;
+        sqlx::query(&query)
+            .bind(self.id)
+            .bind(self.library_type)
+            .execute(db).await?;
 
         // Clear items
-        let query = format!("DELETE FROM {}.items WHERE library=$1", schema);
-        sqlx::query(&query).bind(self.id).execute(db).await?;
+        let query = format!("DELETE FROM {}.items WHERE library_id=$1 AND library_type=$2", schema);
+        sqlx::query(&query)
+            .bind(self.id)
+            .bind(self.library_type)
+            .execute(db).await?;
 
         // Clear collections
-        let query = format!("DELETE FROM {}.collections WHERE library=$1", schema);
-        sqlx::query(&query).bind(self.id).execute(db).await?;
+        let query = format!("DELETE FROM {}.collections WHERE library_id=$1 AND library_type=$2", schema);
+        sqlx::query(&query)
+            .bind(self.id)
+            .bind(self.library_type)
+            .execute(db).await?;
 
         // Clear tags
-        let query = format!("DELETE FROM {}.tags WHERE library=$1", schema);
-        sqlx::query(&query).bind(self.id).execute(db).await?;
+        let query = format!("DELETE FROM {}.tags WHERE library_id=$1 AND library_type=$2", schema);
+        sqlx::query(&query)
+            .bind(self.id)
+            .bind(self.library_type)
+            .execute(db).await?;
 
         // Reset local versions
         self.version = 0;
@@ -186,7 +302,7 @@ impl Group {
             return Ok(());
         }
 
-        tracing::info!("Starting sync for group {}", self.id);
+        tracing::info!("Starting sync for {} library {}", self.library_type, self.id);
 
         // Sync collections
         let (_, collection_version) = self.sync_collections().await?;
@@ -198,33 +314,28 @@ impl Group {
         let (_, item_version) = self.download_items().await?;
         
         // Sync tags
-        let (_, tag_version) = self.sync_tags().await?;
-        
-        // Sync deletions
-        let _ = self.sync_deleted().await?;
-
-        // Update versions if successful
-        if collection_version > self.collection_version {
-            self.collection_version = collection_version;
-            self.is_modified = true;
-        }
-        if item_version > self.item_version {
-            self.item_version = item_version;
-            self.is_modified = true;
-        }
-        if tag_version > self.tag_version {
+        if self.sync_tags {
+            let (_, tag_version) = self.sync_tags().await?;
             self.tag_version = tag_version;
-            self.is_modified = true;
         }
 
-        // Update local group record
-        if self.is_modified {
-            self.update_local().await?;
-        }
+        // Sync deleted items
+        let _deleted_version = self.sync_deleted().await?;
 
-        tracing::info!("Sync completed for group {}", self.id);
+        // Update local versions
+        self.item_version = item_version;
+        self.collection_version = collection_version;
+
+        // Update library in database
+        self.update_local().await?;
+
+        tracing::info!("Completed sync for {} library {}", self.library_type, self.id);
+
         Ok(())
     }
+
+    // The rest of the sync methods adapted from Group implementation
+    // but using the new library_id and library_type fields
 
     async fn sync_collections(&self) -> Result<(i64, i64)> {
         let client = self.client.as_ref().ok_or_else(|| Error::InvalidData("Client not set".to_string()))?;
@@ -239,7 +350,7 @@ impl Group {
 
         // Download collections from cloud if we can download
         if self.can_download() {
-            let (versions, cloud_version) = client.get_collections_version_cloud(self.id, self.collection_version).await?;
+            let (versions, cloud_version) = client.get_collections_version_cloud_unified(self.id, self.library_type, self.collection_version).await?;
             
             if cloud_version > last_modified_version {
                 last_modified_version = cloud_version;
@@ -255,7 +366,7 @@ impl Group {
 
             // Fetch collections in batches of 50
             for chunk in collections_to_update.chunks(50) {
-                let (collections, _) = client.get_collections_cloud(self.id, chunk).await?;
+                let (collections, _) = client.get_collections_cloud_unified(self.id, self.library_type, chunk).await?;
                 for collection in collections {
                     self.update_collection_local(&collection).await?;
                     counter += 1;
@@ -276,14 +387,14 @@ impl Group {
         let client = self.client.as_ref().ok_or_else(|| Error::InvalidData("Client not set".to_string()))?;
 
         // Get the current cloud version first
-        let (_, mut last_modified_version) = client.get_items_version_cloud(self.id, 0, false).await?;
+        let (_, mut last_modified_version) = client.get_items_version_cloud_unified(self.id, self.library_type, 0, false).await?;
 
         // Query for items that need to be uploaded
         let query = format!(
             r#"
             SELECT key, version, data, meta, trashed, deleted, sync, md5
             FROM {}.items
-            WHERE library = $1 AND (sync = 'new' OR sync = 'modified')
+            WHERE library_id = $1 AND library_type = $2 AND (sync = 'new' OR sync = 'modified')
             ORDER BY key
             "#,
             schema
@@ -291,6 +402,7 @@ impl Group {
 
         let rows = sqlx::query(&query)
             .bind(self.id)
+            .bind(self.library_type)
             .fetch_all(db)
             .await?;
 
@@ -315,7 +427,8 @@ impl Group {
             let mut item = super::Item {
                 key: key.clone(),
                 version,
-                library: self.id,
+                library_id: self.id,
+                library_type: self.library_type,
                 data: item_data,
                 meta: item_meta,
                 trashed,
@@ -336,7 +449,6 @@ impl Group {
                 continue;
             }
 
-            // The update_cloud method now handles database updates internally
             counter += 1;
         }
 
@@ -355,7 +467,7 @@ impl Group {
 
         // Download both trashed and non-trashed items
         for trashed in [true, false] {
-            let (versions, cloud_version) = client.get_items_version_cloud(self.id, self.item_version, trashed).await?;
+            let (versions, cloud_version) = client.get_items_version_cloud_unified(self.id, self.library_type, self.item_version, trashed).await?;
             
             if cloud_version > last_modified_version {
                 last_modified_version = cloud_version;
@@ -371,7 +483,7 @@ impl Group {
 
             // Fetch items in batches of 50
             for chunk in items_to_update.chunks(50) {
-                let items = client.get_items_cloud(self.id, chunk).await?;
+                let items = client.get_items_cloud_unified(self.id, self.library_type, chunk).await?;
                 for item in &items {
                     self.update_item_local(item).await?;
                     counter += 1;
@@ -381,7 +493,7 @@ impl Group {
                 for item in &items {
                     if item.data.item_type == "attachment" {
                         if let Some(filesystem) = &self.filesystem {
-                            if let Err(e) = item.download_attachment_cloud(client, filesystem.as_ref(), self.id).await {
+                            if let Err(e) = item.download_attachment_cloud(client, filesystem.as_ref()).await {
                                 tracing::error!("Failed to download attachment for item {}: {}", item.key, e);
                                 // Continue with other items even if one attachment fails
                             }
@@ -403,7 +515,7 @@ impl Group {
 
         let client = self.client.as_ref().ok_or_else(|| Error::InvalidData("Client not set".to_string()))?;
         
-        let (tags, last_modified_version) = client.get_tags_cloud(self.id, self.tag_version).await?;
+        let (tags, last_modified_version) = client.get_tags_cloud_unified(self.id, self.library_type, self.tag_version).await?;
         
         let mut counter = 0i64;
         for tag in tags {
@@ -421,7 +533,7 @@ impl Group {
 
         let client = self.client.as_ref().ok_or_else(|| Error::InvalidData("Client not set".to_string()))?;
         
-        let (deletions, last_modified_version) = client.get_deletions_cloud(self.id, self.version).await?;
+        let (deletions, last_modified_version) = client.get_deletions_cloud_unified(self.id, self.library_type, self.version).await?;
         
         let mut counter = 0i64;
         
@@ -446,15 +558,17 @@ impl Group {
         Ok(counter)
     }
 
-    // Helper methods for database operations
+    // Helper methods for database operations using new schema
+
     async fn get_collection_version_local(&self, collection_key: &str) -> Result<i64> {
         let db = self.db.as_ref().ok_or_else(|| Error::InvalidData("Database not set".to_string()))?;
         let schema = self.db_schema.as_ref().ok_or_else(|| Error::InvalidData("Schema not set".to_string()))?;
 
-        let query = format!("SELECT version FROM {}.collections WHERE key = $1 AND library = $2", schema);
+        let query = format!("SELECT version FROM {}.collections WHERE key = $1 AND library_id = $2 AND library_type = $3", schema);
         let result = sqlx::query(&query)
             .bind(collection_key)
             .bind(self.id)
+            .bind(self.library_type)
             .fetch_optional(db)
             .await?;
 
@@ -465,10 +579,11 @@ impl Group {
         let db = self.db.as_ref().ok_or_else(|| Error::InvalidData("Database not set".to_string()))?;
         let schema = self.db_schema.as_ref().ok_or_else(|| Error::InvalidData("Schema not set".to_string()))?;
 
-        let query = format!("SELECT version FROM {}.items WHERE key = $1 AND library = $2", schema);
+        let query = format!("SELECT version FROM {}.items WHERE key = $1 AND library_id = $2 AND library_type = $3", schema);
         let result = sqlx::query(&query)
             .bind(item_key)
             .bind(self.id)
+            .bind(self.library_type)
             .fetch_optional(db)
             .await?;
 
@@ -488,13 +603,14 @@ impl Group {
             r#"
             SELECT key, version, data, meta, deleted, sync
             FROM {}.collections
-            WHERE library = $1 AND (sync = 'new' OR sync = 'modified')
+            WHERE library_id = $1 AND library_type = $2 AND (sync = 'new' OR sync = 'modified')
             "#,
             schema
         );
 
         let rows = sqlx::query(&query)
             .bind(self.id)
+            .bind(self.library_type)
             .fetch_all(db)
             .await?;
 
@@ -517,7 +633,8 @@ impl Group {
             let mut collection = super::Collection {
                 key: key.clone(),
                 version,
-                library: self.id,
+                library_id: self.id,
+                library_type: self.library_type,
                 data: collection_data,
                 meta: collection_meta,
                 deleted,
@@ -530,7 +647,7 @@ impl Group {
                 db_schema: Some(schema.clone()),
             };
 
-            // Upload to cloud using the new client-based approach
+            // Upload to cloud using the unified client methods
             match collection.update_cloud(client, library_version).await {
                 Ok(new_version) => {
                     library_version = new_version;
@@ -557,9 +674,9 @@ impl Group {
 
         let query = format!(
             r#"
-            INSERT INTO {}.collections (key, version, library, data, meta, deleted, sync)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
-            ON CONFLICT (key, library) DO UPDATE SET
+            INSERT INTO {}.collections (key, version, library_id, library_type, data, meta, deleted, sync)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            ON CONFLICT (key, library_id, library_type) DO UPDATE SET
                 version = EXCLUDED.version,
                 data = EXCLUDED.data,
                 meta = EXCLUDED.meta,
@@ -573,6 +690,7 @@ impl Group {
             .bind(&collection.key)
             .bind(collection.version)
             .bind(self.id)
+            .bind(self.library_type)
             .bind(&data_json)
             .bind(&meta_json)
             .bind(collection.deleted)
@@ -594,9 +712,9 @@ impl Group {
 
         let query = format!(
             r#"
-            INSERT INTO {}.items (key, version, library, data, meta, trashed, deleted, sync, md5)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-            ON CONFLICT (key, library) DO UPDATE SET
+            INSERT INTO {}.items (key, version, library_id, library_type, data, meta, trashed, deleted, sync, md5)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            ON CONFLICT (key, library_id, library_type) DO UPDATE SET
                 version = EXCLUDED.version,
                 data = EXCLUDED.data,
                 meta = EXCLUDED.meta,
@@ -612,6 +730,7 @@ impl Group {
             .bind(&item.key)
             .bind(item.version)
             .bind(self.id)
+            .bind(self.library_type)
             .bind(&data_json)
             .bind(&meta_json)
             .bind(item.trashed)
@@ -637,9 +756,9 @@ impl Group {
 
         let query = format!(
             r#"
-            INSERT INTO {}.tags (tag, meta, library)
-            VALUES ($1, $2, $3)
-            ON CONFLICT (tag, library) DO UPDATE SET
+            INSERT INTO {}.tags (tag, meta, library_id, library_type)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (tag, library_id, library_type) DO UPDATE SET
                 meta = EXCLUDED.meta
             "#,
             schema
@@ -649,6 +768,7 @@ impl Group {
             .bind(&tag.data.tag)
             .bind(&meta_json)
             .bind(self.id)
+            .bind(self.library_type)
             .execute(db)
             .await?;
 
@@ -660,10 +780,11 @@ impl Group {
         let schema = self.db_schema.as_ref().ok_or_else(|| Error::InvalidData("Schema not set".to_string()))?;
 
         // Check if item exists and get its current sync status
-        let query = format!("SELECT sync, deleted FROM {}.items WHERE key = $1 AND library = $2", schema);
+        let query = format!("SELECT sync, deleted FROM {}.items WHERE key = $1 AND library_id = $2 AND library_type = $3", schema);
         let result = sqlx::query(&query)
             .bind(item_key)
             .bind(self.id)
+            .bind(self.library_type)
             .fetch_optional(db)
             .await?;
 
@@ -682,13 +803,14 @@ impl Group {
                 _ => {
                     // Local leads, mark as synced with cloud version
                     let query = format!(
-                        "UPDATE {}.items SET version = $1, sync = 'synced' WHERE key = $2 AND library = $3",
+                        "UPDATE {}.items SET version = $1, sync = 'synced' WHERE key = $2 AND library_id = $3 AND library_type = $4",
                         schema
                     );
                     sqlx::query(&query)
                         .bind(last_modified_version)
                         .bind(item_key)
                         .bind(self.id)
+                        .bind(self.library_type)
                         .execute(db)
                         .await?;
                     false
@@ -697,12 +819,13 @@ impl Group {
 
             if should_delete {
                 let query = format!(
-                    "UPDATE {}.items SET deleted = true WHERE key = $1 AND library = $2",
+                    "UPDATE {}.items SET deleted = true WHERE key = $1 AND library_id = $2 AND library_type = $3",
                     schema
                 );
                 sqlx::query(&query)
                     .bind(item_key)
                     .bind(self.id)
+                    .bind(self.library_type)
                     .execute(db)
                     .await?;
             }
@@ -716,10 +839,11 @@ impl Group {
         let schema = self.db_schema.as_ref().ok_or_else(|| Error::InvalidData("Schema not set".to_string()))?;
 
         // Check if collection exists and get its current sync status
-        let query = format!("SELECT sync, deleted FROM {}.collections WHERE key = $1 AND library = $2", schema);
+        let query = format!("SELECT sync, deleted FROM {}.collections WHERE key = $1 AND library_id = $2 AND library_type = $3", schema);
         let result = sqlx::query(&query)
             .bind(collection_key)
             .bind(self.id)
+            .bind(self.library_type)
             .fetch_optional(db)
             .await?;
 
@@ -738,13 +862,14 @@ impl Group {
                 _ => {
                     // Local leads, mark as synced with cloud version
                     let query = format!(
-                        "UPDATE {}.collections SET version = $1, sync = 'synced' WHERE key = $2 AND library = $3",
+                        "UPDATE {}.collections SET version = $1, sync = 'synced' WHERE key = $2 AND library_id = $3 AND library_type = $4",
                         schema
                     );
                     sqlx::query(&query)
                         .bind(last_modified_version)
                         .bind(collection_key)
                         .bind(self.id)
+                        .bind(self.library_type)
                         .execute(db)
                         .await?;
                     false
@@ -753,12 +878,13 @@ impl Group {
 
             if should_delete {
                 let query = format!(
-                    "UPDATE {}.collections SET deleted = true WHERE key = $1 AND library = $2",
+                    "UPDATE {}.collections SET deleted = true WHERE key = $1 AND library_id = $2 AND library_type = $3",
                     schema
                 );
                 sqlx::query(&query)
                     .bind(collection_key)
                     .bind(self.id)
+                    .bind(self.library_type)
                     .execute(db)
                     .await?;
             }
@@ -771,10 +897,11 @@ impl Group {
         let db = self.db.as_ref().ok_or_else(|| Error::InvalidData("Database not set".to_string()))?;
         let schema = self.db_schema.as_ref().ok_or_else(|| Error::InvalidData("Schema not set".to_string()))?;
 
-        let query = format!("DELETE FROM {}.tags WHERE tag = $1 AND library = $2", schema);
+        let query = format!("DELETE FROM {}.tags WHERE tag = $1 AND library_id = $2 AND library_type = $3", schema);
         sqlx::query(&query)
             .bind(tag_name)
             .bind(self.id)
+            .bind(self.library_type)
             .execute(db)
             .await?;
 
@@ -785,62 +912,18 @@ impl Group {
         let db = self.db.as_ref().ok_or_else(|| Error::InvalidData("Database not set".to_string()))?;
         let schema = self.db_schema.as_ref().ok_or_else(|| Error::InvalidData("Schema not set".to_string()))?;
 
-        // Serialize the data to JSON for the JSONB column
-        let data_json = match &self.data {
-            Some(data) => Some(serde_json::to_string(data)?),
-            None => None,
-        };
-
-        // Update the groups table
-        let groups_query = format!(
-            r#"
-            UPDATE {}.groups 
-            SET version = $2, data = $3, itemversion = $4, collectionversion = $5, 
-                tagversion = $6, deleted = $7, modified = COALESCE($8, modified)
-            WHERE id = $1
-            "#,
+        let query = format!(
+            "UPDATE {}.libraries SET version=$1, item_version=$2, collection_version=$3, tag_version=$4, modified=NOW() WHERE id=$5 AND library_type=$6",
             schema
         );
-
-        sqlx::query(&groups_query)
-            .bind(self.id)
+        
+        sqlx::query(&query)
             .bind(self.version)
-            .bind(&data_json)
             .bind(self.item_version)
             .bind(self.collection_version)
             .bind(self.tag_version)
-            .bind(self.deleted)
-            .bind(self.modified)
-            .execute(db)
-            .await?;
-
-        // Update the syncgroups table
-        let sync_direction_str = match self.sync_direction {
-            SyncDirection::None => "none",
-            SyncDirection::ToCloud => "tocloud",
-            SyncDirection::ToLocal => "tolocal",
-            SyncDirection::BothCloud => "bothcloud",
-            SyncDirection::BothLocal => "bothlocal",
-            SyncDirection::BothManual => "bothmanual",
-        };
-
-        let syncgroups_query = format!(
-            r#"
-            INSERT INTO {}.syncgroups (id, active, direction, tags)
-            VALUES ($1, $2, $3, $4)
-            ON CONFLICT (id) DO UPDATE SET
-                active = EXCLUDED.active,
-                direction = EXCLUDED.direction,
-                tags = EXCLUDED.tags
-            "#,
-            schema
-        );
-
-        sqlx::query(&syncgroups_query)
             .bind(self.id)
-            .bind(self.active)
-            .bind(sync_direction_str)
-            .bind(self.sync_tags)
+            .bind(self.library_type)
             .execute(db)
             .await?;
 

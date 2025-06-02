@@ -1,14 +1,15 @@
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use crate::{Result, Error};
-use super::{ItemData, SyncStatus};
+use super::{ItemData, SyncStatus, LibraryType};
 use crate::filesystem::{FileSystem, FileGetOptions, FilePutOptions};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Item {
     pub key: String,
     pub version: i64,
-    pub library: i64,
+    pub library_id: i64,
+    pub library_type: LibraryType,
     pub data: ItemData,
     pub meta: Option<ItemMeta>,
     pub trashed: bool,
@@ -71,9 +72,9 @@ impl Item {
 
         let query = format!(
             r#"
-            INSERT INTO {}.items (key, version, library, data, meta, trashed, deleted, sync, md5)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-            ON CONFLICT (key, library) DO UPDATE SET
+            INSERT INTO {}.items (key, version, library_id, library_type, data, meta, trashed, deleted, sync, md5)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            ON CONFLICT (key, library_id, library_type) DO UPDATE SET
                 version = EXCLUDED.version,
                 data = EXCLUDED.data,
                 meta = EXCLUDED.meta,
@@ -88,7 +89,8 @@ impl Item {
         sqlx::query(&query)
             .bind(&self.key)
             .bind(self.version)
-            .bind(self.library)
+            .bind(self.library_id)
+            .bind(self.library_type)
             .bind(&data_json)
             .bind(&meta_json)
             .bind(self.trashed)
@@ -105,18 +107,19 @@ impl Item {
         // Check if item is marked for deletion
         if self.deleted {
             // Delete item from Zotero API
-            let new_version = client.delete_item(self.library, &self.key, *library_version).await?;
+            let new_version = client.delete_item_unified(self.library_id, self.library_type, &self.key, *library_version).await?;
             *library_version = new_version;
             
             // Remove from local database
             if let (Some(db), Some(schema)) = (&self.db, &self.db_schema) {
                 let query = format!(
-                    "DELETE FROM {}.items WHERE key = $1 AND library = $2",
+                    "DELETE FROM {}.items WHERE key = $1 AND library_id = $2 AND library_type = $3",
                     schema
                 );
                 sqlx::query(&query)
                     .bind(&self.key)
-                    .bind(self.library)
+                    .bind(self.library_id)
+                    .bind(self.library_type)
                     .execute(db)
                     .await?;
             }
@@ -126,7 +129,7 @@ impl Item {
         match self.sync_status {
             SyncStatus::New | SyncStatus::Modified => {
                 // Upload item to Zotero API
-                let new_version = client.upload_item(self.library, self, *library_version).await?;
+                let new_version = client.upload_item_unified(self.library_id, self.library_type, self, *library_version).await?;
                 
                 // Update local status
                 self.sync_status = SyncStatus::Synced;
@@ -137,20 +140,21 @@ impl Item {
                 if self.data.item_type == "attachment" && 
                    self.data.extra_fields.get("linkMode").and_then(|v| v.as_str()) == Some("imported_file") {
                     // TODO: File upload requires filesystem and file_path parameters
-                    // self.upload_file_cloud(client, filesystem, group_id, file_path).await?;
+                    // self.upload_file_cloud(client, filesystem, library_id, library_type, file_path).await?;
                     tracing::info!("Attachment upload skipped - requires filesystem context");
                 }
                 
                 // Update local database
                 if let (Some(db), Some(schema)) = (&self.db, &self.db_schema) {
                     let query = format!(
-                        "UPDATE {}.items SET sync = 'synced', version = $1 WHERE key = $2 AND library = $3",
+                        "UPDATE {}.items SET sync = 'synced', version = $1 WHERE key = $2 AND library_id = $3 AND library_type = $4",
                         schema
                     );
                     sqlx::query(&query)
                         .bind(self.version)
                         .bind(&self.key)
-                        .bind(self.library)
+                        .bind(self.library_id)
+                        .bind(self.library_type)
                         .execute(db)
                         .await?;
                 }
@@ -174,7 +178,6 @@ impl Item {
         &self,
         client: &super::ZoteroClient,
         filesystem: &dyn FileSystem,
-        group_id: i64,
     ) -> Result<()> {
         // Only process attachment items with linked_file or imported_file link modes
         let link_mode = self.data.extra_fields.get("linkMode")
@@ -209,7 +212,7 @@ impl Item {
         }
 
         // Get download URL from Zotero API
-        let download_url = match client.get_attachment_download_url(group_id, &self.key).await {
+        let download_url = match client.get_attachment_download_url_unified(self.library_id, self.library_type, &self.key).await {
             Ok(url) => url,
             Err(Error::Api { code: 404, .. }) => {
                 tracing::warn!("Attachment file not found in Zotero: {}", self.key);
@@ -245,7 +248,6 @@ impl Item {
         &self,
         client: &super::ZoteroClient,
         filesystem: &dyn FileSystem,
-        group_id: i64,
         file_path: &str,
     ) -> Result<()> {
         // Only process attachment items
@@ -272,8 +274,9 @@ impl Item {
         let mtime = chrono::Utc::now().timestamp();
 
         // Get upload authorization from Zotero
-        let auth = client.get_upload_authorization(
-            group_id,
+        let auth = client.get_upload_authorization_unified(
+            self.library_id,
+            self.library_type,
             &self.key,
             filename,
             file_data.len(),
@@ -297,7 +300,7 @@ impl Item {
             client.upload_file_to_url(&upload_url, &file_data, &params).await?;
             
             // Register upload completion
-            client.register_upload_completion(group_id, &self.key, &upload_key).await?;
+            client.register_upload_completion_unified(self.library_id, self.library_type, &self.key, &upload_key).await?;
             
             tracing::info!("Successfully uploaded file: {}", self.key);
         } else {

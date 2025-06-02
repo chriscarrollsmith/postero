@@ -112,18 +112,20 @@ pub struct GroupMeta {
 pub struct GroupData {
     pub id: i64,
     pub version: i64,
-    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    pub owner: i64,
-    #[serde(rename = "type")]
-    pub group_type: String,
-    #[serde(rename = "libraryReading")]
-    pub library_reading: String,
-    #[serde(rename = "libraryEditing")]
-    pub library_editing: String,
-    #[serde(rename = "fileEditing")]
-    pub file_editing: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner: Option<i64>,
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub group_type: Option<String>,
+    #[serde(rename = "libraryReading", skip_serializing_if = "Option::is_none")]
+    pub library_reading: Option<String>,
+    #[serde(rename = "libraryEditing", skip_serializing_if = "Option::is_none")]
+    pub library_editing: Option<String>,
+    #[serde(rename = "fileEditing", skip_serializing_if = "Option::is_none")]
+    pub file_editing: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
     #[serde(rename = "hasImage", skip_serializing_if = "Option::is_none")]

@@ -6,7 +6,8 @@ WITH RECURSIVE collection_hierarchy AS (
     -- Base case: collections without parent
     SELECT 
         c.key,
-        c.library,
+        c.library_id,
+        c.library_type,
         c.data->>'name' as name,
         c.data->>'parentCollection' as parent_key,
         c.data->>'name' as path,
@@ -19,18 +20,22 @@ WITH RECURSIVE collection_hierarchy AS (
     -- Recursive case: collections with parent
     SELECT 
         c.key,
-        c.library,
+        c.library_id,
+        c.library_type,
         c.data->>'name' as name,
         c.data->>'parentCollection' as parent_key,
         ch.path || ' > ' || (c.data->>'name') as path,
         ch.level + 1 as level
     FROM public.collections c
-    JOIN collection_hierarchy ch ON c.data->>'parentCollection' = ch.key AND c.library = ch.library
+    JOIN collection_hierarchy ch ON c.data->>'parentCollection' = ch.key 
+        AND c.library_id = ch.library_id 
+        AND c.library_type = ch.library_type
     WHERE c.data->>'parentCollection' IS NOT NULL AND c.data->>'parentCollection' != ''
 )
 SELECT 
     key,
-    library,
+    library_id,
+    library_type,
     name,
     parent_key,
     path,
@@ -41,7 +46,8 @@ FROM collection_hierarchy;
 CREATE MATERIALIZED VIEW IF NOT EXISTS public.item_type_hier AS
 SELECT 
     i.key,
-    i.library,
+    i.library_id,
+    i.library_type,
     i.data->>'itemType' as item_type,
     i.data->>'title' as title,
     i.data->>'parentItem' as parent_item,
@@ -61,18 +67,18 @@ FROM public.items i
 WHERE i.deleted = false;
 
 -- Create indexes on materialized views
-CREATE INDEX IF NOT EXISTS idx_collection_name_hier_library ON public.collection_name_hier(library);
+CREATE INDEX IF NOT EXISTS idx_collection_name_hier_library ON public.collection_name_hier(library_id, library_type);
 CREATE INDEX IF NOT EXISTS idx_collection_name_hier_parent ON public.collection_name_hier(parent_key);
 CREATE INDEX IF NOT EXISTS idx_collection_name_hier_level ON public.collection_name_hier(level);
 
-CREATE INDEX IF NOT EXISTS idx_item_type_hier_library ON public.item_type_hier(library);
+CREATE INDEX IF NOT EXISTS idx_item_type_hier_library ON public.item_type_hier(library_id, library_type);
 CREATE INDEX IF NOT EXISTS idx_item_type_hier_type ON public.item_type_hier(item_type);
 CREATE INDEX IF NOT EXISTS idx_item_type_hier_parent ON public.item_type_hier(parent_item);
 CREATE INDEX IF NOT EXISTS idx_item_type_hier_level ON public.item_type_hier(hierarchy_level);
 
 -- Create unique indexes for concurrent refresh capability
-CREATE UNIQUE INDEX IF NOT EXISTS idx_collection_name_hier_unique ON public.collection_name_hier(key, library);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_item_type_hier_unique ON public.item_type_hier(key, library);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_collection_name_hier_unique ON public.collection_name_hier(key, library_id, library_type);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_item_type_hier_unique ON public.item_type_hier(key, library_id, library_type);
 
 -- Initial refresh (non-concurrent since views are empty)
 -- These will run only if the views were newly created or if they need refreshing.

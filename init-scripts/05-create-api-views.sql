@@ -1,10 +1,41 @@
 -- Create enhanced views for PostgREST API access
 
+-- Enhanced libraries view
+CREATE OR REPLACE VIEW public.libraries_view AS
+SELECT
+    l.id,
+    l.library_type,
+    l.version,
+    l.created,
+    l.modified,
+    l.deleted,
+    l.item_version,
+    l.collection_version,
+    l.tag_version,
+    l.gitlab,
+    -- Extract fields from JSON data if they exist
+    l.data->>'name' as name,
+    l.data->>'description' as description,
+    l.data->>'url' as url,
+    l.data->>'type' as group_type,  -- Only relevant for group libraries
+    CASE 
+        WHEN l.data->>'libraryReading' IS NOT NULL 
+        THEN l.data->>'libraryReading'
+        ELSE 'public' 
+    END as library_reading,
+    l.data->>'libraryEditing' as library_editing,
+    l.data->>'fileEditing' as file_editing,
+    l.data->>'owner' as owner,
+    -- Keep full JSON data
+    l.data as full_data
+FROM public.libraries l;
+
 -- Enhanced items view with flattened structure
 CREATE OR REPLACE VIEW public.items_view AS
 SELECT
     i.key,
-    i.library as group_id,
+    i.library_id,
+    i.library_type,
     i.version,
     i.sync,
     i.trashed,
@@ -52,7 +83,8 @@ FROM public.items i;
 CREATE OR REPLACE VIEW public.collections_view AS
 SELECT
     c.key,
-    c.library as group_id,
+    c.library_id,
+    c.library_type,
     c.version,
     c.sync,
     c.deleted,
@@ -66,44 +98,26 @@ SELECT
     c.meta as meta_data
 FROM public.collections c;
 
--- Enhanced groups view
-CREATE OR REPLACE VIEW public.groups_view AS
-SELECT
-    g.id as group_id,
-    g.version,
-    g.created,
-    g.modified,
-    g.deleted,
-    g.itemversion,
-    g.collectionversion,
-    g.tagversion,
-    g.gitlab,
-    -- Extract fields from JSON data if they exist
-    g.data->>'name' as name,
-    g.data->>'description' as description,
-    g.data->>'type' as group_type,
-    g.data->>'url' as url,
-    -- Keep full JSON data
-    g.data as full_data
-FROM public.groups g;
-
 -- Enhanced tags view
 CREATE OR REPLACE VIEW public.tags_view AS
 SELECT
     t.tag as name,
-    t.library as group_id,
+    t.library_id,
+    t.library_type,
     t.meta as meta_data
 FROM public.tags t;
 
 -- Collection lookup function
 CREATE OR REPLACE FUNCTION public.get_collection_by_name(
-    p_group_id bigint,
+    p_library_id bigint,
+    p_library_type public.library_type,
     p_name text,
     p_parent_key text DEFAULT NULL
 )
 RETURNS TABLE(
     key varchar(8),
-    group_id bigint,
+    library_id bigint,
+    library_type public.library_type,
     name text,
     parent_collection text,
     version bigint,
@@ -114,14 +128,16 @@ BEGIN
     RETURN QUERY
     SELECT 
         cv.key,
-        cv.group_id,
+        cv.library_id,
+        cv.library_type,
         cv.name,
         cv.parent_collection,
         cv.version,
         cv.sync,
         cv.full_data
     FROM public.collections_view cv
-    WHERE cv.group_id = p_group_id
+    WHERE cv.library_id = p_library_id
+      AND cv.library_type = p_library_type
       AND cv.name = p_name
       AND cv.deleted = false
       AND (p_parent_key IS NULL OR cv.parent_collection = p_parent_key);
@@ -130,12 +146,14 @@ $$ LANGUAGE plpgsql SECURITY DEFINER;
 
 -- Item lookup function by old ID (if needed for backward compatibility)
 CREATE OR REPLACE FUNCTION public.get_item_by_oldid(
-    p_group_id bigint,
+    p_library_id bigint,
+    p_library_type public.library_type,
     p_oldid text
 )
 RETURNS TABLE(
     key varchar(8),
-    group_id bigint,
+    library_id bigint,
+    library_type public.library_type,
     item_type text,
     title text,
     version bigint,
@@ -146,14 +164,16 @@ BEGIN
     RETURN QUERY
     SELECT 
         iv.key,
-        iv.group_id,
+        iv.library_id,
+        iv.library_type,
         iv.item_type,
         iv.title,
         iv.version,
         iv.sync,
         iv.full_data
     FROM public.items_view iv
-    WHERE iv.group_id = p_group_id
+    WHERE iv.library_id = p_library_id
+      AND iv.library_type = p_library_type
       AND iv.full_data->>'oldid' = p_oldid
       AND iv.deleted = false;
 END;
@@ -171,20 +191,20 @@ $$ LANGUAGE plpgsql SECURITY DEFINER;
 -- Grant permissions on views to API roles
 GRANT SELECT ON public.items_view TO api_anon, api_user;
 GRANT SELECT ON public.collections_view TO api_anon, api_user;
-GRANT SELECT ON public.groups_view TO api_anon, api_user;
+GRANT SELECT ON public.libraries_view TO api_anon, api_user;
 GRANT SELECT ON public.tags_view TO api_anon, api_user;
 
 -- Grant execute permissions on functions
-GRANT EXECUTE ON FUNCTION public.get_collection_by_name(bigint, text, text) TO api_anon, api_user;
-GRANT EXECUTE ON FUNCTION public.get_item_by_oldid(bigint, text) TO api_anon, api_user;
+GRANT EXECUTE ON FUNCTION public.get_collection_by_name(bigint, public.library_type, text, text) TO api_anon, api_user;
+GRANT EXECUTE ON FUNCTION public.get_item_by_oldid(bigint, public.library_type, text) TO api_anon, api_user;
 GRANT EXECUTE ON FUNCTION public.refresh_materialized_views() TO api_user;
 
 -- Add comments for API documentation
+COMMENT ON VIEW public.libraries_view IS 'Unified view of libraries (both user and group) with metadata';
 COMMENT ON VIEW public.items_view IS 'Flattened view of items with commonly used fields extracted from JSON data for easy API access';
 COMMENT ON VIEW public.collections_view IS 'Flattened view of collections with commonly used fields extracted from JSON data';
-COMMENT ON VIEW public.groups_view IS 'Flattened view of groups/libraries with metadata';
-COMMENT ON VIEW public.tags_view IS 'Simple view of tags with group association';
+COMMENT ON VIEW public.tags_view IS 'Simple view of tags with library association';
 
-COMMENT ON FUNCTION public.get_collection_by_name(bigint, text, text) IS 'Find a collection by name within a group, optionally scoped by parent collection';
-COMMENT ON FUNCTION public.get_item_by_oldid(bigint, text) IS 'Find an item by its old ID for backward compatibility';
+COMMENT ON FUNCTION public.get_collection_by_name(bigint, public.library_type, text, text) IS 'Find a collection by name within a library, optionally scoped by parent collection';
+COMMENT ON FUNCTION public.get_item_by_oldid(bigint, public.library_type, text) IS 'Find an item by its old ID for backward compatibility';
 COMMENT ON FUNCTION public.refresh_materialized_views() IS 'Refresh all materialized views used by the API'; 

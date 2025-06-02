@@ -5,7 +5,7 @@ use lazy_static::lazy_static;
 
 pub mod client;
 pub mod types;
-pub mod group;
+pub mod library;
 pub mod item;
 pub mod collection;
 pub mod tag;
@@ -14,12 +14,12 @@ pub mod sync;
 
 pub use client::ZoteroClient;
 pub use types::*;
-pub use group::Group;
+pub use library::Library;
 pub use item::{Item, ItemType};
 pub use collection::Collection;
 pub use tag::Tag;
 pub use user::User;
-pub use sync::{SyncDirection, SyncStatus};
+pub use sync::{SyncDirection, SyncStatus, LibraryType};
 
 lazy_static! {
     static ref TEXT_VARIABLES_REGEX: Regex = Regex::new(r#"([a-zA-Z0-9_]+:([^ \n<"]+|"[^"]+"))"#).unwrap();
@@ -49,15 +49,6 @@ pub fn text_to_metadata(text: &str) -> HashMap<String, Vec<String>> {
 pub fn text_no_meta(text: &str) -> String {
     let result = TEXT_VARIABLES_REGEX.replace_all(text, " ");
     REMOVE_EMPTY_REGEX.replace_all(&result, "").to_string()
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Library {
-    #[serde(rename = "type")]
-    pub library_type: String,
-    pub id: i64,
-    pub name: String,
-    pub links: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

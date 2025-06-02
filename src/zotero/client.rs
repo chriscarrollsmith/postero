@@ -5,7 +5,7 @@ use std::sync::Arc;
 use url::Url;
 use crate::{Error, Result};
 use crate::filesystem::FileSystem;
-use super::{Group, ApiKey, UploadAuthorization, UploadAuthorizationResponse};
+use super::{Library, ApiKey, UploadAuthorization, UploadAuthorizationResponse, LibraryType};
 use serde_json;
 
 #[derive(Debug, Clone)]
@@ -116,7 +116,7 @@ impl ZoteroClient {
         Ok(result)
     }
 
-    pub async fn get_group_cloud(&self, group_id: i64) -> Result<Group> {
+    pub async fn get_group_cloud(&self, group_id: i64) -> Result<super::GroupData> {
         let url = self.base_url.join(&format!("groups/{}", group_id))?;
         
         let response = self.client.get(url).send().await?;
@@ -128,18 +128,19 @@ impl ZoteroClient {
             });
         }
 
-        let group: Group = response.json().await?;
+        let group: super::GroupData = response.json().await?;
         Ok(group)
     }
 
-    pub async fn load_group_local(&self, group_id: i64) -> Result<Group> {
+    pub async fn load_group_local(&self, group_id: i64) -> Result<Library> {
         let query = format!(
             r#"
-            SELECT g.id, g.version, g.created, g.modified, g.data, g.deleted, 
-                   g.itemversion, g.collectionversion, g.tagversion, g.gitlab,
-                   sg.active, sg.direction, sg.tags
-            FROM {}.groups g, {}.syncgroups sg 
-            WHERE g.id = sg.id AND g.id = $1
+            SELECT l.id, l.library_type, l.version, l.created, l.modified, l.data, l.deleted, 
+                   l.item_version, l.collection_version, l.tag_version, l.gitlab,
+                   sl.active, sl.direction, sl.tags
+            FROM {}.libraries l, {}.sync_libraries sl 
+            WHERE l.id = sl.library_id AND l.library_type = sl.library_type 
+                  AND l.id = $1 AND l.library_type = 'group'
             "#,
             self.db_schema, self.db_schema
         );
@@ -150,18 +151,19 @@ impl ZoteroClient {
             .await
             .map_err(Error::from_sqlx_error)?;
 
-        Group::from_row(&row)
+        Library::from_row(&row)
     }
 
-    pub async fn load_groups_local(&self) -> Result<Vec<Group>> {
+    pub async fn load_groups_local(&self) -> Result<Vec<Library>> {
         let query = format!(
             r#"
-            SELECT g.id, g.version, g.created, g.modified, g.data, g.deleted, 
-                   g.itemversion, g.collectionversion, g.tagversion, g.gitlab,
-                   sg.active, sg.direction, sg.tags
-            FROM {}.groups g, {}.syncgroups sg 
-            WHERE g.id = sg.id
-            ORDER BY g.data->>'name'
+            SELECT l.id, l.library_type, l.version, l.created, l.modified, l.data, l.deleted, 
+                   l.item_version, l.collection_version, l.tag_version, l.gitlab,
+                   sl.active, sl.direction, sl.tags
+            FROM {}.libraries l, {}.sync_libraries sl 
+            WHERE l.id = sl.library_id AND l.library_type = sl.library_type 
+                  AND l.library_type = 'group'
+            ORDER BY l.data->>'name'
             "#,
             self.db_schema, self.db_schema
         );
@@ -170,31 +172,31 @@ impl ZoteroClient {
         
         let mut groups = Vec::new();
         for row in rows {
-            groups.push(Group::from_row(&row)?);
+            groups.push(Library::from_row(&row)?);
         }
 
         Ok(groups)
     }
 
     pub async fn create_empty_group_local(&self, group_id: i64) -> Result<(bool, super::SyncDirection)> {
-        // First, try to create the basic group record
-        let groups_query = format!(
+        // First, try to create the basic library record
+        let libraries_query = format!(
             r#"
-            INSERT INTO {}.groups (id, version, created, modified)
-            VALUES ($1, 0, NOW(), NOW())
-            ON CONFLICT (id) DO NOTHING
+            INSERT INTO {}.libraries (id, library_type, version, created, modified)
+            VALUES ($1, 'group', 0, NOW(), NOW())
+            ON CONFLICT (id, library_type) DO NOTHING
             "#,
             self.db_schema
         );
 
-        let result = sqlx::query(&groups_query)
+        let result = sqlx::query(&libraries_query)
             .bind(group_id)
             .execute(&self.db)
             .await?;
 
         let was_created = result.rows_affected() > 0;
 
-        // Now create or update the syncgroups entry
+        // Now create or update the sync_libraries entry
         let direction = super::SyncDirection::ToLocal;
         let direction_str = match direction {
             super::SyncDirection::None => "none",
@@ -205,18 +207,18 @@ impl ZoteroClient {
             super::SyncDirection::BothManual => "bothmanual",
         };
 
-        let syncgroups_query = format!(
+        let sync_libraries_query = format!(
             r#"
-            INSERT INTO {}.syncgroups (id, active, direction, tags)
-            VALUES ($1, $2, $3::syncdirection, false)
-            ON CONFLICT (id) DO UPDATE SET
+            INSERT INTO {}.sync_libraries (library_id, library_type, active, direction, tags)
+            VALUES ($1, 'group', $2, $3::syncdirection, false)
+            ON CONFLICT (library_id, library_type) DO UPDATE SET
                 active = EXCLUDED.active,
                 direction = EXCLUDED.direction
             "#,
             self.db_schema
         );
 
-        sqlx::query(&syncgroups_query)
+        sqlx::query(&sync_libraries_query)
             .bind(group_id)
             .bind(self.new_group_active)
             .bind(direction_str)
@@ -237,7 +239,7 @@ impl ZoteroClient {
             .join(", ");
 
         let query = format!(
-            "DELETE FROM {}.groups WHERE id NOT IN ({})",
+            "DELETE FROM {}.libraries WHERE library_type = 'group' AND id NOT IN ({})",
             self.db_schema, placeholders
         );
 
@@ -940,5 +942,598 @@ impl ZoteroClient {
         }
 
         Ok(())
+    }
+
+    // New unified library methods that support both user and group libraries
+    
+    fn build_library_url(&self, library_id: i64, library_type: LibraryType, endpoint: &str) -> Result<Url> {
+        let path = match library_type {
+            LibraryType::User => format!("users/{}/{}", library_id, endpoint),
+            LibraryType::Group => format!("groups/{}/{}", library_id, endpoint),
+        };
+        self.base_url.join(&path).map_err(Error::from)
+    }
+
+    pub async fn delete_item_unified(&self, library_id: i64, library_type: LibraryType, item_key: &str, library_version: i64) -> Result<i64> {
+        let url = self.build_library_url(library_id, library_type, &format!("items/{}", item_key))?;
+
+        let response = self.client
+            .delete(url)
+            .header("If-Unmodified-Since-Version", library_version.to_string())
+            .send()
+            .await?;
+
+        // Handle rate limiting
+        self.handle_rate_limiting(&response).await?;
+
+        match response.status().as_u16() {
+            204 => {
+                // Success - deleted
+                let new_version = response
+                    .headers()
+                    .get("Last-Modified-Version")
+                    .and_then(|h| h.to_str().ok())
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(library_version + 1);
+                Ok(new_version)
+            }
+            412 => {
+                // Precondition failed - conflict
+                Err(Error::Api {
+                    code: 412,
+                    message: "Item has been modified remotely. Sync required.".to_string(),
+                })
+            }
+            _ => {
+                Err(Error::Api {
+                    code: response.status().as_u16(),
+                    message: response.text().await.unwrap_or_default(),
+                })
+            }
+        }
+    }
+
+    pub async fn upload_item_unified(&self, library_id: i64, library_type: LibraryType, item: &super::Item, library_version: i64) -> Result<i64> {
+        let url = self.build_library_url(library_id, library_type, "items")?;
+
+        let items_array = vec![&item.data];
+        let response = self.client
+            .post(url)
+            .header("If-Unmodified-Since-Version", library_version.to_string())
+            .json(&items_array)
+            .send()
+            .await?;
+
+        // Handle rate limiting
+        self.handle_rate_limiting(&response).await?;
+
+        match response.status().as_u16() {
+            200 => {
+                // Success
+                let new_version = response
+                    .headers()
+                    .get("Last-Modified-Version")
+                    .and_then(|h| h.to_str().ok())
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(library_version + 1);
+                Ok(new_version)
+            }
+            412 => {
+                // Precondition failed - conflict
+                Err(Error::Api {
+                    code: 412,
+                    message: "Library has been modified remotely. Sync required.".to_string(),
+                })
+            }
+            _ => {
+                Err(Error::Api {
+                    code: response.status().as_u16(),
+                    message: response.text().await.unwrap_or_default(),
+                })
+            }
+        }
+    }
+
+    pub async fn get_attachment_download_url_unified(&self, library_id: i64, library_type: LibraryType, item_key: &str) -> Result<String> {
+        let url = self.build_library_url(library_id, library_type, &format!("items/{}/file", item_key))?;
+        
+        let response = self.client
+            .get(url)
+            .send()
+            .await?;
+
+        // Handle rate limiting
+        self.handle_rate_limiting(&response).await?;
+
+        match response.status().as_u16() {
+            302 => {
+                // Redirect to download URL
+                if let Some(location) = response.headers().get("location") {
+                    match location.to_str() {
+                        Ok(url) => Ok(url.to_string()),
+                        Err(_) => Err(Error::Api {
+                            code: 302,
+                            message: "Invalid location header encoding".to_string(),
+                        })
+                    }
+                } else {
+                    Err(Error::Api {
+                        code: 302,
+                        message: "Redirect response missing location header".to_string(),
+                    })
+                }
+            }
+            404 => {
+                Err(Error::Api {
+                    code: 404,
+                    message: "Attachment file not found".to_string(),
+                })
+            }
+            _ => {
+                Err(Error::Api {
+                    code: response.status().as_u16(),
+                    message: response.text().await.unwrap_or_default(),
+                })
+            }
+        }
+    }
+
+    pub async fn get_upload_authorization_unified(
+        &self,
+        library_id: i64,
+        library_type: LibraryType,
+        item_key: &str,
+        filename: &str,
+        filesize: usize,
+        md5: &Option<String>,
+        mtime: Option<i64>,
+    ) -> Result<UploadAuthorization> {
+        let url = self.build_library_url(library_id, library_type, &format!("items/{}/file", item_key))?;
+        
+        let mut upload_data = serde_json::json!({
+            "filename": filename,
+            "filesize": filesize,
+        });
+
+        if let Some(ref md5_hash) = md5 {
+            upload_data["md5"] = serde_json::Value::String(md5_hash.clone());
+        }
+
+        if let Some(mtime_val) = mtime {
+            upload_data["mtime"] = serde_json::Value::Number(serde_json::Number::from(mtime_val));
+        }
+
+        let response = self.client
+            .post(url)
+            .json(&upload_data)
+            .send()
+            .await?;
+
+        // Handle rate limiting
+        self.handle_rate_limiting(&response).await?;
+
+        match response.status().as_u16() {
+            200 => {
+                // File already exists, no upload needed
+                Ok(UploadAuthorization {
+                    exists: true,
+                    upload_url: None,
+                    upload_key: None,
+                    params: None,
+                })
+            }
+            201 => {
+                // Upload required
+                let auth: UploadAuthorizationResponse = response.json().await?;
+                Ok(UploadAuthorization {
+                    exists: false,
+                    upload_url: Some(auth.url),
+                    upload_key: Some(auth.upload_key),
+                    params: Some(auth.params),
+                })
+            }
+            412 => {
+                Err(Error::Api {
+                    code: 412,
+                    message: "File upload precondition failed".to_string(),
+                })
+            }
+            413 => {
+                Err(Error::Api {
+                    code: 413,
+                    message: "File too large".to_string(),
+                })
+            }
+            _ => {
+                Err(Error::Api {
+                    code: response.status().as_u16(),
+                    message: response.text().await.unwrap_or_default(),
+                })
+            }
+        }
+    }
+
+    pub async fn register_upload_completion_unified(
+        &self,
+        library_id: i64,
+        library_type: LibraryType,
+        item_key: &str,
+        upload_key: &str,
+    ) -> Result<()> {
+        let url = self.build_library_url(library_id, library_type, &format!("items/{}/file", item_key))?;
+        
+        let completion_data = serde_json::json!({
+            "upload": upload_key
+        });
+
+        let response = self.client
+            .post(url)
+            .json(&completion_data)
+            .send()
+            .await?;
+
+        // Handle rate limiting
+        self.handle_rate_limiting(&response).await?;
+
+        if !response.status().is_success() {
+            return Err(Error::Api {
+                code: response.status().as_u16(),
+                message: response.text().await.unwrap_or_default(),
+            });
+        }
+
+        Ok(())
+    }
+
+    pub async fn delete_collection_unified(&self, library_id: i64, library_type: LibraryType, collection_key: &str, library_version: i64) -> Result<i64> {
+        let url = self.build_library_url(library_id, library_type, &format!("collections/{}", collection_key))?;
+
+        let response = self.client
+            .delete(url)
+            .header("If-Unmodified-Since-Version", library_version.to_string())
+            .send()
+            .await?;
+
+        // Handle rate limiting
+        self.handle_rate_limiting(&response).await?;
+
+        match response.status().as_u16() {
+            204 => {
+                // Success - deleted
+                let new_version = response
+                    .headers()
+                    .get("Last-Modified-Version")
+                    .and_then(|h| h.to_str().ok())
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(library_version + 1);
+                Ok(new_version)
+            }
+            412 => {
+                // Precondition failed - conflict
+                Err(Error::Api {
+                    code: 412,
+                    message: "Collection has been modified remotely. Sync required.".to_string(),
+                })
+            }
+            _ => {
+                Err(Error::Api {
+                    code: response.status().as_u16(),
+                    message: response.text().await.unwrap_or_default(),
+                })
+            }
+        }
+    }
+
+    pub async fn upload_collection_unified(&self, library_id: i64, library_type: LibraryType, collection: &super::Collection, library_version: i64) -> Result<i64> {
+        let url = self.build_library_url(library_id, library_type, "collections")?;
+
+        let collections_array = vec![&collection.data];
+        let response = self.client
+            .post(url)
+            .header("If-Unmodified-Since-Version", library_version.to_string())
+            .json(&collections_array)
+            .send()
+            .await?;
+
+        // Handle rate limiting
+        self.handle_rate_limiting(&response).await?;
+
+        match response.status().as_u16() {
+            200 => {
+                // Success
+                let new_version = response
+                    .headers()
+                    .get("Last-Modified-Version")
+                    .and_then(|h| h.to_str().ok())
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(library_version + 1);
+                Ok(new_version)
+            }
+            412 => {
+                // Precondition failed - conflict
+                Err(Error::Api {
+                    code: 412,
+                    message: "Library has been modified remotely. Sync required.".to_string(),
+                })
+            }
+            _ => {
+                Err(Error::Api {
+                    code: response.status().as_u16(),
+                    message: response.text().await.unwrap_or_default(),
+                })
+            }
+        }
+    }
+
+    pub async fn load_user_local(&self, user_id: i64) -> Result<Library> {
+        let query = format!(
+            r#"
+            SELECT l.id, l.library_type, l.version, l.created, l.modified, l.data, l.deleted, 
+                   l.item_version, l.collection_version, l.tag_version, l.gitlab,
+                   sl.active, sl.direction, sl.tags
+            FROM {}.libraries l, {}.sync_libraries sl 
+            WHERE l.id = sl.library_id AND l.library_type = sl.library_type 
+                  AND l.id = $1 AND l.library_type = 'user'
+            "#,
+            self.db_schema, self.db_schema
+        );
+
+        let row = sqlx::query(&query)
+            .bind(user_id)
+            .fetch_one(&self.db)
+            .await
+            .map_err(Error::from_sqlx_error)?;
+
+        Library::from_row(&row)
+    }
+
+    pub async fn create_empty_user_local(&self, user_id: i64) -> Result<(bool, super::SyncDirection)> {
+        // First, try to create the basic library record
+        let libraries_query = format!(
+            r#"
+            INSERT INTO {}.libraries (id, library_type, version, created, modified)
+            VALUES ($1, 'user', 0, NOW(), NOW())
+            ON CONFLICT (id, library_type) DO NOTHING
+            "#,
+            self.db_schema
+        );
+
+        let result = sqlx::query(&libraries_query)
+            .bind(user_id)
+            .execute(&self.db)
+            .await?;
+
+        let was_created = result.rows_affected() > 0;
+
+        // Now create or update the sync_libraries entry
+        let direction = super::SyncDirection::ToLocal;
+        let direction_str = match direction {
+            super::SyncDirection::None => "none",
+            super::SyncDirection::ToCloud => "tocloud",
+            super::SyncDirection::ToLocal => "tolocal",
+            super::SyncDirection::BothCloud => "bothcloud",
+            super::SyncDirection::BothLocal => "bothlocal",
+            super::SyncDirection::BothManual => "bothmanual",
+        };
+
+        let sync_libraries_query = format!(
+            r#"
+            INSERT INTO {}.sync_libraries (library_id, library_type, active, direction, tags)
+            VALUES ($1, 'user', $2, $3::syncdirection, false)
+            ON CONFLICT (library_id, library_type) DO UPDATE SET
+                active = EXCLUDED.active,
+                direction = EXCLUDED.direction
+            "#,
+            self.db_schema
+        );
+
+        sqlx::query(&sync_libraries_query)
+            .bind(user_id)
+            .bind(true) // User libraries are active by default
+            .bind(direction_str)
+            .execute(&self.db)
+            .await?;
+
+        Ok((was_created, direction))
+    }
+
+    pub async fn delete_unknown_libraries_local(&self, known_libraries: &[i64]) -> Result<()> {
+        if known_libraries.is_empty() {
+            return Ok(());
+        }
+
+        let placeholders: String = (1..=known_libraries.len())
+            .map(|i| format!("${}", i))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let query = format!(
+            "DELETE FROM {}.libraries WHERE id NOT IN ({})",
+            self.db_schema, placeholders
+        );
+
+        let mut query_builder = sqlx::query(&query);
+        for &library_id in known_libraries {
+            query_builder = query_builder.bind(library_id);
+        }
+
+        query_builder.execute(&self.db).await?;
+        Ok(())
+    }
+
+    // Unified API methods that work for both user and group libraries
+    
+    pub async fn get_collections_version_cloud_unified(&self, library_id: i64, library_type: LibraryType, since_version: i64) -> Result<(std::collections::HashMap<String, i64>, i64)> {
+        let url = self.build_library_url(library_id, library_type, "collections")?;
+        
+        let response = self.client
+            .get(url)
+            .query(&[("format", "versions"), ("since", &since_version.to_string())])
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            return Err(Error::Api {
+                code: response.status().as_u16(),
+                message: response.text().await.unwrap_or_default(),
+            });
+        }
+
+        let last_modified_version = response
+            .headers()
+            .get("Last-Modified-Version")
+            .and_then(|h| h.to_str().ok())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(since_version);
+
+        let versions: std::collections::HashMap<String, i64> = response.json().await?;
+        Ok((versions, last_modified_version))
+    }
+
+    pub async fn get_collections_cloud_unified(&self, library_id: i64, library_type: LibraryType, collection_keys: &[String]) -> Result<(Vec<super::Collection>, i64)> {
+        if collection_keys.is_empty() {
+            return Ok((Vec::new(), 0));
+        }
+
+        let url = self.build_library_url(library_id, library_type, "collections")?;
+        let keys = collection_keys.join(",");
+        
+        let response = self.client
+            .get(url)
+            .query(&[("collectionKey", &keys)])
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            return Err(Error::Api {
+                code: response.status().as_u16(),
+                message: response.text().await.unwrap_or_default(),
+            });
+        }
+
+        let last_modified_version = response
+            .headers()
+            .get("Last-Modified-Version")
+            .and_then(|h| h.to_str().ok())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+
+        let collections: Vec<super::Collection> = response.json().await?;
+        Ok((collections, last_modified_version))
+    }
+
+    pub async fn get_items_version_cloud_unified(&self, library_id: i64, library_type: LibraryType, since_version: i64, trashed: bool) -> Result<(std::collections::HashMap<String, i64>, i64)> {
+        let url = self.build_library_url(library_id, library_type, "items")?;
+        
+        let mut params = vec![
+            ("format", "versions".to_string()),
+            ("since", since_version.to_string()),
+        ];
+        
+        if trashed {
+            params.push(("trashed", "1".to_string()));
+        }
+        
+        let response = self.client
+            .get(url)
+            .query(&params)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            return Err(Error::Api {
+                code: response.status().as_u16(),
+                message: response.text().await.unwrap_or_default(),
+            });
+        }
+
+        let last_modified_version = response
+            .headers()
+            .get("Last-Modified-Version")
+            .and_then(|h| h.to_str().ok())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(since_version);
+
+        let versions: std::collections::HashMap<String, i64> = response.json().await?;
+        Ok((versions, last_modified_version))
+    }
+
+    pub async fn get_items_cloud_unified(&self, library_id: i64, library_type: LibraryType, item_keys: &[String]) -> Result<Vec<super::Item>> {
+        if item_keys.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let url = self.build_library_url(library_id, library_type, "items")?;
+        let keys = item_keys.join(",");
+        
+        let response = self.client
+            .get(url)
+            .query(&[("itemKey", &keys)])
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            return Err(Error::Api {
+                code: response.status().as_u16(),
+                message: response.text().await.unwrap_or_default(),
+            });
+        }
+
+        let items: Vec<super::Item> = response.json().await?;
+        Ok(items)
+    }
+
+    pub async fn get_tags_cloud_unified(&self, library_id: i64, library_type: LibraryType, since_version: i64) -> Result<(Vec<super::Tag>, i64)> {
+        let url = self.build_library_url(library_id, library_type, "tags")?;
+        
+        let response = self.client
+            .get(url)
+            .query(&[("since", &since_version.to_string())])
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            return Err(Error::Api {
+                code: response.status().as_u16(),
+                message: response.text().await.unwrap_or_default(),
+            });
+        }
+
+        let last_modified_version = response
+            .headers()
+            .get("Last-Modified-Version")
+            .and_then(|h| h.to_str().ok())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(since_version);
+
+        let tags: Vec<super::Tag> = response.json().await?;
+        Ok((tags, last_modified_version))
+    }
+
+    pub async fn get_deletions_cloud_unified(&self, library_id: i64, library_type: LibraryType, since_version: i64) -> Result<(super::Deletions, i64)> {
+        let url = self.build_library_url(library_id, library_type, "deleted")?;
+        
+        let response = self.client
+            .get(url)
+            .query(&[("since", &since_version.to_string())])
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            return Err(Error::Api {
+                code: response.status().as_u16(),
+                message: response.text().await.unwrap_or_default(),
+            });
+        }
+
+        let last_modified_version = response
+            .headers()
+            .get("Last-Modified-Version")
+            .and_then(|h| h.to_str().ok())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(since_version);
+
+        let deletions: super::Deletions = response.json().await?;
+        Ok((deletions, last_modified_version))
     }
 } 

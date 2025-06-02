@@ -1,13 +1,14 @@
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use crate::{Result, Error};
-use super::{CollectionData, SyncStatus};
+use super::{CollectionData, SyncStatus, LibraryType};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Collection {
     pub key: String,
     pub version: i64,
-    pub library: i64,
+    pub library_id: i64,
+    pub library_type: LibraryType,
     pub data: CollectionData,
     pub meta: Option<CollectionMeta>,
     pub deleted: bool,
@@ -51,9 +52,9 @@ impl Collection {
 
         let query = format!(
             r#"
-            INSERT INTO {}.collections (key, version, library, data, meta, deleted, sync)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
-            ON CONFLICT (key, library) DO UPDATE SET
+            INSERT INTO {}.collections (key, version, library_id, library_type, data, meta, deleted, sync)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            ON CONFLICT (key, library_id, library_type) DO UPDATE SET
                 version = EXCLUDED.version,
                 data = EXCLUDED.data,
                 meta = EXCLUDED.meta,
@@ -66,7 +67,8 @@ impl Collection {
         sqlx::query(&query)
             .bind(&self.key)
             .bind(self.version)
-            .bind(self.library)
+            .bind(self.library_id)
+            .bind(self.library_type)
             .bind(&data_json)
             .bind(&meta_json)
             .bind(self.deleted)
@@ -81,17 +83,18 @@ impl Collection {
         // Check if collection is marked for deletion
         if self.deleted {
             // Delete collection from Zotero API
-            let new_version = client.delete_collection(self.library, &self.key, library_version).await?;
+            let new_version = client.delete_collection_unified(self.library_id, self.library_type, &self.key, library_version).await?;
             
             // Remove from local database
             if let (Some(db), Some(schema)) = (&self.db, &self.db_schema) {
                 let query = format!(
-                    "DELETE FROM {}.collections WHERE key = $1 AND library = $2",
+                    "DELETE FROM {}.collections WHERE key = $1 AND library_id = $2 AND library_type = $3",
                     schema
                 );
                 sqlx::query(&query)
                     .bind(&self.key)
-                    .bind(self.library)
+                    .bind(self.library_id)
+                    .bind(self.library_type)
                     .execute(db)
                     .await?;
             }
@@ -102,7 +105,7 @@ impl Collection {
         match self.sync_status {
             SyncStatus::New | SyncStatus::Modified => {
                 // Upload collection to Zotero API
-                let new_version = client.upload_collection(self.library, self, library_version).await?;
+                let new_version = client.upload_collection_unified(self.library_id, self.library_type, self, library_version).await?;
                 
                 // Update local status
                 self.sync_status = SyncStatus::Synced;
@@ -111,13 +114,14 @@ impl Collection {
                 // Update local database
                 if let (Some(db), Some(schema)) = (&self.db, &self.db_schema) {
                     let query = format!(
-                        "UPDATE {}.collections SET sync = 'synced', version = $1 WHERE key = $2 AND library = $3",
+                        "UPDATE {}.collections SET sync = 'synced', version = $1 WHERE key = $2 AND library_id = $3 AND library_type = $4",
                         schema
                     );
                     sqlx::query(&query)
                         .bind(self.version)
                         .bind(&self.key)
-                        .bind(self.library)
+                        .bind(self.library_id)
+                        .bind(self.library_type)
                         .execute(db)
                         .await?;
                 }
