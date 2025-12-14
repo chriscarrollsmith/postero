@@ -302,7 +302,8 @@ impl Library {
             return Ok(());
         }
 
-        tracing::info!("Starting sync for {} library {}", self.library_type, self.id);
+        tracing::info!("Starting sync for {} library {} (version={}, item_version={}, collection_version={})",
+            self.library_type, self.id, self.version, self.item_version, self.collection_version);
 
         // Sync collections
         tracing::info!("Starting sync_collections for {} library {}", self.library_type, self.id);
@@ -329,7 +330,7 @@ impl Library {
 
         // Sync deleted items
         tracing::info!("Starting sync_deleted for {} library {}", self.library_type, self.id);
-        let _deleted_version = self.sync_deleted().await?;
+        self.version = self.sync_deleted().await?;
         tracing::info!("Completed sync_deleted for {} library {}", self.library_type, self.id);
 
         // Update local versions
@@ -402,7 +403,7 @@ impl Library {
         // Query for items that need to be uploaded
         let query = format!(
             r#"
-            SELECT key, version, data, meta, trashed, deleted, sync, md5
+            SELECT key, version, data, meta, trashed, deleted, sync::TEXT as sync, md5
             FROM {}.items
             WHERE library_id = $1 AND library_type = $2 AND (sync = 'new' OR sync = 'modified')
             ORDER BY key
@@ -421,17 +422,17 @@ impl Library {
         for row in rows {
             let key: String = row.get("key");
             let version: i64 = row.get("version");
-            let data_json: String = row.get("data");
-            let meta_json: Option<String> = row.get("meta");
+            let data_value: serde_json::Value = row.get("data");
+            let meta_value: Option<serde_json::Value> = row.get("meta");
             let trashed: bool = row.get("trashed");
             let deleted: bool = row.get("deleted");
             let sync_status: String = row.get("sync");
             let md5: Option<String> = row.get("md5");
 
             // Parse the item data
-            let item_data: super::ItemData = serde_json::from_str(&data_json)?;
-            let item_meta: Option<super::item::ItemMeta> = meta_json
-                .map(|json| serde_json::from_str(&json))
+            let item_data: super::ItemData = serde_json::from_value(data_value)?;
+            let item_meta: Option<super::item::ItemMeta> = meta_value
+                .map(|v| serde_json::from_value(v))
                 .transpose()?;
 
             let mut item = super::Item {
@@ -567,10 +568,10 @@ impl Library {
             counter += 1;
         }
 
-        tracing::info!("Completed sync_deleted for {} library {}, processed {} deletions", 
+        tracing::info!("Completed sync_deleted for {} library {}, processed {} deletions",
             self.library_type, self.id, counter);
 
-        Ok(counter)
+        Ok(last_modified_version)
     }
 
     // Helper methods for database operations using new schema
