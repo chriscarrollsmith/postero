@@ -1,90 +1,64 @@
-# Postero - Rust Implementation
+# Postero
 
-A high-performance Zotero synchronization application with PostgreSQL and PostgREST integration.
+A high-performance Zotero synchronization tool written in Rust.
 
-## Features
+## What It Does
 
-- **Async/Await Architecture**: Built with Tokio for high-performance async operations
-- **Type-Safe Database Operations**: Uses SQLx for compile-time verified SQL queries
-- **S3 Storage Integration**: Supports MinIO/S3 compatible storage for attachments
-- **Robust Error Handling**: Comprehensive error types with proper context
-- **Structured Logging**: Uses tracing for structured, configurable logging
-- **Configuration Management**: TOML-based configuration with command-line overrides
+Postero syncs your Zotero library (groups, items, collections, tags, attachments) to a local PostgreSQL database, enabling:
 
-## Architecture
+- **Full SQL access** to your reference library
+- **Offline backup** of all Zotero data
+- **REST API** via PostgREST for programmatic access
+- **S3/MinIO storage** for attachments
 
-### Core Components
+## Prerequisites
 
-- **`postero::config`**: Configuration management and TOML parsing
-- **`postero::error`**: Centralized error handling with detailed error types
-- **`postero::filesystem`**: Async filesystem abstraction with S3 implementation
-- **`postero::zotero`**: Zotero API client and data models
-
-### Dependencies
-
-Key dependencies include:
-- `tokio`: Async runtime
-- `sqlx`: Type-safe SQL toolkit
-- `reqwest`: HTTP client for Zotero API
-- `serde`: Serialization framework
-- `aws-sdk-s3`: S3 client for storage
-- `tracing`: Structured logging
-
-## Installation
-
-### Prerequisites
-
-- Rust 1.70+ (2021 edition)
+- Rust 1.70+
 - PostgreSQL 12+
-- MinIO or S3-compatible storage
+- Docker & Docker Compose (for local development)
+- MinIO or S3-compatible storage (optional, for attachments)
 
-### Build from Source
+## Quick Start
+
+### 1. Clone and Build
 
 ```bash
-git clone <repository>
+git clone https://github.com/chriscarrollsmith/postero
 cd postero
 cargo build --release
 ```
 
-### Database Setup
-
-The application requires a PostgreSQL database. To initialize the database schema, services, and PostgREST interface, run the comprehensive setup script from the project root:
+### 2. Start Services
 
 ```bash
 ./setup-database.sh
 ```
 
-This script handles:
-- Starting all Docker services (`postgres`, `minio`, and `postgrest`) by calling `docker compose`.
-- Waiting for PostgreSQL to be ready.
-- Running all necessary database initialization scripts (creating extensions, enums, tables, materialized views, API roles, and views).
-- Verifying the database setup and PostgREST API availability.
+This starts PostgreSQL, MinIO, and PostgREST via Docker Compose and initializes the database schema.
 
-## Configuration
+### 3. Configure
 
-Create a `postero.toml` configuration file:
+Create `postero.toml`:
 
 ```toml
-Endpoint = "https://api.zotero.org"
-Apikey = "your-zotero-api-key"
-Loglevel = "info"
+endpoint = "https://api.zotero.org"
+apikey = "your-zotero-api-key"
+loglevel = "info"
 newgroupactive = true
 
 [database]
-ServerType = "postgres"
-DSN = "postgresql://user:password@localhost/zotero"
-Schema = "public"
+servertype = "postgres"
+dsn = "postgres://postgres:postgres@localhost:5432/zotero?sslmode=disable"
+schema = "public"
 
 [s3]
-endpoint = "http://localhost:9000"
-accessKeyId = "minioaccesskey"
-secretAccessKey = "miniosecretkey"
+endpoint = "localhost:9000"
+accessKeyId = "minioadmin"
+secretAccessKey = "minioadmin"
 useSSL = false
 ```
 
-## Usage
-
-### Basic Sync
+### 4. Sync
 
 ```bash
 # Sync all groups
@@ -93,161 +67,63 @@ cargo run --bin sync
 # Sync specific group
 cargo run --bin sync -- --group 12345
 
-# Clear and sync specific group
+# Clear and re-sync a group
 cargo run --bin sync -- --group 12345 --clear
 
 # Use custom config file
 cargo run --bin sync -- --config /path/to/config.toml
 ```
 
-### Programmatic Usage
+## Architecture
 
-```rust
-use postero::{
-    config::Config,
-    filesystem::S3FileSystem,
-    zotero::ZoteroClient,
-};
-use sqlx::PgPool;
-use std::sync::Arc;
-
-#[tokio::main]
-async fn main() -> postero::Result<()> {
-    // Load configuration
-    let config = Config::load("postero.toml")?;
-    
-    // Connect to database
-    let db = PgPool::connect(&config.db.dsn).await?;
-    
-    // Initialize filesystem
-    let fs = Arc::new(
-        S3FileSystem::new(
-            &config.s3.endpoint,
-            &config.s3.access_key_id,
-            &config.s3.secret_access_key,
-            config.s3.use_ssl,
-        ).await?
-    );
-    
-    // Create Zotero client
-    let zotero = ZoteroClient::new(
-        &config.endpoint,
-        &config.apikey,
-        db,
-        fs,
-        &config.db.schema,
-        config.new_group_active(),
-    ).await?;
-    
-    // Get user's groups
-    if let Some(key) = zotero.current_key() {
-        let groups = zotero.get_user_group_versions(key.user_id).await?;
-        println!("Found {} groups", groups.len());
-    }
-    
-    Ok(())
-}
+```
+src/
+├── bin/sync.rs      # CLI sync tool
+├── config.rs        # TOML configuration
+├── error.rs         # Error types
+├── lib.rs           # Library exports
+├── filesystem/      # S3 storage abstraction
+│   ├── mod.rs
+│   └── s3.rs
+└── zotero/          # Zotero API client
+    ├── mod.rs
+    ├── client.rs    # API client
+    ├── group.rs     # Group sync
+    ├── item.rs      # Item handling
+    ├── collection.rs
+    ├── tag.rs
+    ├── user.rs
+    ├── sync.rs      # Sync logic
+    └── types.rs     # Data types
 ```
 
-## Error Handling
+## Key Features
 
-The Rust implementation provides comprehensive error handling:
-
-```rust
-use postero::{Error, Result};
-
-match zotero.load_group_local(group_id).await {
-    Ok(group) => println!("Loaded group: {}", group.name),
-    Err(Error::EmptyResult) => println!("Group not found"),
-    Err(Error::Database(e)) => eprintln!("Database error: {}", e),
-    Err(Error::Api { code, message }) => {
-        eprintln!("API error {}: {}", code, message)
-    }
-    Err(e) => eprintln!("Other error: {}", e),
-}
-```
+- **Async/await** - Built on Tokio for efficient I/O
+- **Type-safe SQL** - SQLx with compile-time query verification
+- **Structured logging** - Tracing for configurable log output
+- **Flexible config** - Accepts both camelCase and lowercase field names
 
 ## Development
 
-### Running Tests
-
 ```bash
+# Run tests
 cargo test
-```
 
-### Linting
-
-```bash
+# Lint
 cargo clippy -- -D warnings
-```
 
-### Formatting
-
-```bash
+# Format
 cargo fmt
 ```
 
-## Performance Considerations
-
-### Async Operations
-
-All I/O operations are async and can be efficiently multiplexed:
-
-```rust
-// Parallel group processing
-let futures: Vec<_> = group_ids.iter()
-    .map(|&id| zotero.load_group_local(id))
-    .collect();
-
-let groups = futures::future::join_all(futures).await;
-```
-
-### Memory Usage
-
-- Zero-copy deserialization where possible
-- Streaming for large file operations
-- Efficient JSON handling with serde
-
-### Database Performance
-
-- Connection pooling via SQLx
-- Prepared statements for repeated queries
-- Batch operations for bulk inserts/updates
-
 ## Roadmap
 
-### Planned Features
-
-1. **Enhanced Sync**: Better conflict resolution and merge strategies
-2. **Vector Search**: Integration with embedding models for semantic search
-3. **Full-Text Search**: PostgreSQL FTS integration
-4. **Metrics**: Prometheus metrics for monitoring
-5. **Clustering**: Support for distributed sync operations
-
-### Extensions
-
-The modular architecture supports easy extensions:
-
-- Custom storage backends
-- Additional Zotero API endpoints
-- Custom sync strategies
-- Integration with other reference managers
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests
-5. Run `cargo test` and `cargo clippy`
-6. Submit a pull request
+- [ ] User library sync (in progress on feature branch)
+- [ ] Vector search via pgvector
+- [ ] Full-text search optimization
+- [ ] Prometheus metrics
 
 ## License
 
-This project is licensed under the MIT License.
-
-## Support
-
-For issues and questions:
-1. Check the GitHub issues.
-2. Consult the Zotero API documentation. 
+MIT

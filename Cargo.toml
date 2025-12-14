@@ -1,0 +1,51 @@
+[package]
+name = "postero"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "sync"
+path = "src/bin/sync.rs"
+
+[dependencies]
+# Core dependencies
+tokio = { version = "1.0", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+anyhow = "1.0"
+thiserror = "1.0"
+async-trait = "0.1"
+
+# Configuration
+toml = "0.8"
+clap = { version = "4.0", features = ["derive"] }
+
+# Database
+sqlx = { version = "0.7", features = ["postgres", "runtime-tokio-rustls", "chrono", "uuid"] }
+
+# HTTP client
+reqwest = { version = "0.11", features = ["json", "multipart"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+# S3 storage
+aws-sdk-s3 = "1.0"
+aws-config = "1.0"
+
+# Time handling
+chrono = { version = "0.4", features = ["serde"] }
+
+# UUID
+uuid = { version = "1.0", features = ["v4", "serde"] }
+
+# Regex
+regex = "1.0"
+lazy_static = "1.4"
+
+# URL handling
+url = "2.4"
+
+# MD5
+md5 = "0.7" 
