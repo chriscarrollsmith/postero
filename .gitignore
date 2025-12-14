@@ -1,6 +1,8 @@
 # Various
 .idea
-*.toml
+# Config files (may contain secrets)
+postero.toml
+zoterosync.toml
 *.sum
 go.work
 artifacts/

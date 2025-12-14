@@ -5,13 +5,13 @@ use crate::{Result};
 
 #[derive(Debug, Deserialize)]
 pub struct DatabaseConfig {
-    #[serde(rename = "ServerType")]
+    #[serde(alias = "ServerType", alias = "servertype")]
     pub server_type: String,
-    #[serde(rename = "DSN")]
+    #[serde(alias = "DSN", alias = "dsn")]
     pub dsn: String,
-    #[serde(rename = "connection_max")]
+    #[serde(alias = "connection_max")]
     pub conn_max: Option<i32>,
-    #[serde(rename = "Schema")]
+    #[serde(alias = "Schema", alias = "schema")]
     pub schema: String,
 }
 
@@ -26,41 +26,41 @@ pub struct GitlabConfig {
 #[derive(Debug, Deserialize)]
 pub struct S3Config {
     pub endpoint: String,
-    #[serde(rename = "accessKeyId")]
+    #[serde(alias = "accessKeyId")]
     pub access_key_id: String,
-    #[serde(rename = "secretAccessKey")]
+    #[serde(alias = "secretAccessKey")]
     pub secret_access_key: String,
-    #[serde(rename = "useSSL")]
+    #[serde(alias = "useSSL", alias = "usessl")]
     pub use_ssl: bool,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct Config {
-    #[serde(rename = "Service")]
+    #[serde(alias = "Service", alias = "service")]
     pub service: Option<String>,
-    #[serde(rename = "Synconly")]
+    #[serde(alias = "Synconly", alias = "synconly")]
     pub synconly: Option<Vec<i64>>,
-    #[serde(rename = "ClearBeforeSync")]
+    #[serde(alias = "ClearBeforeSync", alias = "clear_before_sync")]
     pub clear_before_sync: Option<Vec<i64>>,
-    #[serde(rename = "Endpoint")]
+    #[serde(alias = "Endpoint", alias = "endpoint")]
     pub endpoint: String,
-    #[serde(rename = "Apikey")]
+    #[serde(alias = "Apikey", alias = "apikey")]
     pub apikey: String,
-    #[serde(rename = "Logfile")]
+    #[serde(alias = "Logfile", alias = "logfile")]
     pub logfile: Option<String>,
-    #[serde(rename = "Loglevel")]
+    #[serde(alias = "Loglevel", alias = "loglevel")]
     pub loglevel: Option<String>,
-    #[serde(rename = "AccessLog")]
+    #[serde(alias = "AccessLog", alias = "accesslog")]
     pub access_log: Option<String>,
-    #[serde(rename = "newgroupactive")]
+    #[serde(alias = "newgroupactive")]
     pub new_group_active: Option<bool>,
-    #[serde(rename = "database")]
+    #[serde(alias = "database")]
     pub db: DatabaseConfig,
-    #[serde(rename = "groupcacheexpiration")]
+    #[serde(alias = "groupcacheexpiration")]
     pub group_cache_expiration: Option<String>,
-    #[serde(rename = "gitlab")]
+    #[serde(alias = "gitlab")]
     pub gitlab: Option<GitlabConfig>,
-    #[serde(rename = "s3")]
+    #[serde(alias = "s3")]
     pub s3: S3Config,
 }
 
