@@ -48,7 +48,7 @@ newgroupactive = true
 
 [database]
 servertype = "postgres"
-dsn = "postgres://postgres:postgres@localhost:5432/zotero?sslmode=disable"
+dsn = "postgres://postgres:postgres@localhost:5435/zotero?sslmode=disable"
 schema = "public"
 
 [s3]
@@ -88,7 +88,7 @@ src/
 └── zotero/          # Zotero API client
     ├── mod.rs
     ├── client.rs    # API client
-    ├── group.rs     # Group sync
+    ├── library.rs   # Library sync (user + group)
     ├── item.rs      # Item handling
     ├── collection.rs
     ├── tag.rs
@@ -119,7 +119,7 @@ cargo fmt
 
 ## Roadmap
 
-- [ ] User library sync (in progress on feature branch)
+- [x] User library sync
 - [ ] Vector search via pgvector
 - [ ] Full-text search optimization
 - [ ] Prometheus metrics
