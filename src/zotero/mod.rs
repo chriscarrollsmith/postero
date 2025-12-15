@@ -19,7 +19,7 @@ pub use item::{Item, ItemType};
 pub use collection::Collection;
 pub use tag::Tag;
 pub use user::User;
-pub use sync::{SyncDirection, SyncStatus, LibraryType};
+pub use sync::{SyncDirection, SyncMode, SyncStatus, LibraryType};
 
 lazy_static! {
     static ref TEXT_VARIABLES_REGEX: Regex = Regex::new(r#"([a-zA-Z0-9_]+:([^ \n<"]+|"[^"]+"))"#).unwrap();

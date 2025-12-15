@@ -79,4 +79,31 @@ impl Default for SyncStatus {
     fn default() -> Self {
         SyncStatus::New
     }
+}
+
+/// Sync mode for independent incoming/outgoing control
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
+#[sqlx(type_name = "syncmode")]
+#[sqlx(rename_all = "lowercase")]
+pub enum SyncMode {
+    #[serde(rename = "disabled")]
+    Disabled,
+    #[serde(rename = "manual")]
+    Manual,
+    // Future: Automatic, OnDemand, EventDriven
+}
+
+impl Default for SyncMode {
+    fn default() -> Self {
+        SyncMode::Disabled
+    }
+}
+
+impl std::fmt::Display for SyncMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SyncMode::Disabled => write!(f, "disabled"),
+            SyncMode::Manual => write!(f, "manual"),
+        }
+    }
 } 

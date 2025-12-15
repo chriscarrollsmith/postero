@@ -37,4 +37,17 @@ BEGIN
             'incomplete'
         );
     END IF;
+END$$;
+
+-- Create syncmode enum if it doesn't exist
+-- Used for independent incoming/outgoing sync configuration
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'syncmode') THEN
+        CREATE TYPE public.syncmode AS ENUM (
+            'disabled',
+            'manual'
+            -- Future: 'automatic', 'on_demand', 'event_driven'
+        );
+    END IF;
 END$$; 

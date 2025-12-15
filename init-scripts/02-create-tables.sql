@@ -83,7 +83,9 @@ CREATE TABLE IF NOT EXISTS public.sync_libraries (
     library_id bigint NOT NULL,
     library_type public.library_type NOT NULL,
     active boolean DEFAULT true NOT NULL,
-    direction public.syncdirection DEFAULT 'none' NOT NULL,
+    direction public.syncdirection DEFAULT 'none' NOT NULL,  -- Deprecated: use incoming_sync/outgoing_sync
+    incoming_sync public.syncmode DEFAULT 'disabled' NOT NULL,
+    outgoing_sync public.syncmode DEFAULT 'disabled' NOT NULL,
     tags boolean DEFAULT false NOT NULL,
     PRIMARY KEY (library_id, library_type),
     FOREIGN KEY (library_id, library_type) REFERENCES public.libraries(id, library_type) ON DELETE CASCADE
@@ -92,9 +94,27 @@ CREATE TABLE IF NOT EXISTS public.sync_libraries (
 -- Add direction column to sync_libraries if it doesn't exist (in case it was dropped by enum CASCADE)
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns
                    WHERE table_name = 'sync_libraries' AND column_name = 'direction' AND table_schema = 'public') THEN
         ALTER TABLE public.sync_libraries ADD COLUMN direction public.syncdirection DEFAULT 'none' NOT NULL;
+    END IF;
+END$$;
+
+-- Add incoming_sync column if it doesn't exist
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                   WHERE table_name = 'sync_libraries' AND column_name = 'incoming_sync' AND table_schema = 'public') THEN
+        ALTER TABLE public.sync_libraries ADD COLUMN incoming_sync public.syncmode DEFAULT 'disabled' NOT NULL;
+    END IF;
+END$$;
+
+-- Add outgoing_sync column if it doesn't exist
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                   WHERE table_name = 'sync_libraries' AND column_name = 'outgoing_sync' AND table_schema = 'public') THEN
+        ALTER TABLE public.sync_libraries ADD COLUMN outgoing_sync public.syncmode DEFAULT 'disabled' NOT NULL;
     END IF;
 END$$;
 

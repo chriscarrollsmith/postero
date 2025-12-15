@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{Row, PgPool};
 use chrono::{DateTime, Utc};
 use crate::{Result, Error};
-use super::{SyncDirection, LibraryType, GroupData, UserData, ZoteroClient};
+use super::{SyncMode, LibraryType, GroupData, UserData, ZoteroClient};
 use crate::filesystem::FileSystem;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -26,7 +26,8 @@ pub struct Library {
 
     // Fields from sync_libraries table
     pub active: bool,
-    pub sync_direction: SyncDirection,
+    pub incoming_sync: SyncMode,
+    pub outgoing_sync: SyncMode,
     pub sync_tags: bool,
 
     // Computed/helper fields
@@ -61,7 +62,8 @@ impl Library {
             tag_version: row.try_get("tag_version")?,
             gitlab: row.try_get("gitlab")?,
             active: row.try_get("active")?,
-            sync_direction: row.try_get("direction")?,
+            incoming_sync: row.try_get("incoming_sync")?,
+            outgoing_sync: row.try_get("outgoing_sync")?,
             sync_tags: row.try_get("tags")?,
             is_modified: false,
             client: None,
@@ -85,7 +87,8 @@ impl Library {
             tag_version: 0,
             gitlab: None,
             active: true,
-            sync_direction: SyncDirection::ToLocal,
+            incoming_sync: SyncMode::Manual,
+            outgoing_sync: SyncMode::Disabled,
             sync_tags: false,
             is_modified: false,
             client: None,
@@ -109,7 +112,8 @@ impl Library {
             tag_version: 0,
             gitlab: None,
             active: true,
-            sync_direction: SyncDirection::ToLocal,
+            incoming_sync: SyncMode::Manual,
+            outgoing_sync: SyncMode::Disabled,
             sync_tags: false,
             is_modified: false,
             client: None,
@@ -216,13 +220,11 @@ impl Library {
     }
 
     pub fn can_upload(&self) -> bool {
-        matches!(self.sync_direction, 
-            SyncDirection::ToCloud | SyncDirection::BothCloud | SyncDirection::BothLocal | SyncDirection::BothManual)
+        self.outgoing_sync != SyncMode::Disabled
     }
 
     pub fn can_download(&self) -> bool {
-        matches!(self.sync_direction, 
-            SyncDirection::ToLocal | SyncDirection::BothCloud | SyncDirection::BothLocal | SyncDirection::BothManual)
+        self.incoming_sync != SyncMode::Disabled
     }
 
     pub fn build_items_url(&self) -> String {
@@ -298,12 +300,13 @@ impl Library {
     }
 
     pub async fn sync(&mut self) -> Result<()> {
-        if self.sync_direction == SyncDirection::None {
+        if self.incoming_sync == SyncMode::Disabled && self.outgoing_sync == SyncMode::Disabled {
             return Ok(());
         }
 
-        tracing::info!("Starting sync for {} library {} (version={}, item_version={}, collection_version={})",
-            self.library_type, self.id, self.version, self.item_version, self.collection_version);
+        tracing::info!("Starting sync for {} library {} (version={}, item_version={}, collection_version={}, incoming={}, outgoing={})",
+            self.library_type, self.id, self.version, self.item_version, self.collection_version,
+            self.incoming_sync, self.outgoing_sync);
 
         // Sync collections
         tracing::info!("Starting sync_collections for {} library {}", self.library_type, self.id);

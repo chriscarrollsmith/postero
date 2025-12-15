@@ -1,7 +1,7 @@
 use postero::{
     config::Config,
     filesystem::S3FileSystem,
-    zotero::ZoteroClient,
+    zotero::{ZoteroClient, SyncMode},
     Result,
     zotero::Library,
 };
@@ -11,10 +11,39 @@ use std::sync::Arc;
 use tracing::{info, error};
 use tracing_subscriber;
 
+/// Direction override for CLI --direction flag
+#[derive(Debug, Clone, Copy)]
+pub enum DirectionOverride {
+    Incoming,  // Only download from Zotero
+    Outgoing,  // Only upload to Zotero
+    Both,      // Both directions
+}
+
+/// Apply direction override to a library's sync modes
+fn apply_direction_override(library: &mut Library, direction: Option<DirectionOverride>) {
+    if let Some(dir) = direction {
+        match dir {
+            DirectionOverride::Incoming => {
+                library.incoming_sync = SyncMode::Manual;
+                library.outgoing_sync = SyncMode::Disabled;
+            }
+            DirectionOverride::Outgoing => {
+                library.incoming_sync = SyncMode::Disabled;
+                library.outgoing_sync = SyncMode::Manual;
+            }
+            DirectionOverride::Both => {
+                library.incoming_sync = SyncMode::Manual;
+                library.outgoing_sync = SyncMode::Manual;
+            }
+        }
+    }
+}
+
 async fn sync_data(
     config: &Config,
     db: &PgPool,
     fs: Arc<dyn postero::filesystem::FileSystem>,
+    direction_override: Option<DirectionOverride>,
 ) -> Result<()> {
     let zotero = ZoteroClient::new(
         &config.endpoint,
@@ -63,6 +92,9 @@ async fn sync_data(
                                 return Err(e);
                             }
                         }
+
+                        // Apply direction override if specified
+                        apply_direction_override(&mut library, direction_override);
 
                         // Sync the user library
                         if let Err(e) = library.sync().await {
@@ -124,6 +156,9 @@ async fn sync_data(
                         }
                     }
 
+                    // Apply direction override if specified
+                    apply_direction_override(&mut library, direction_override);
+
                     // Sync the library
                     if let Err(e) = library.sync().await {
                         error!("Cannot sync group library #{}: {}", library_id, e);
@@ -159,7 +194,8 @@ async fn sync_data(
                 new_library.tag_version = library.tag_version;
                 new_library.deleted = library.deleted;
                 new_library.active = library.active;
-                new_library.sync_direction = library.sync_direction;
+                new_library.incoming_sync = library.incoming_sync;
+                new_library.outgoing_sync = library.outgoing_sync;
                 new_library.sync_tags = library.sync_tags;
                 
                 // Set up database connection for update
@@ -207,6 +243,14 @@ async fn main() -> Result<()> {
                 .value_name("ID")
                 .help("ID of zotero group to sync")
                 .value_parser(clap::value_parser!(i64))
+        )
+        .arg(
+            Arg::new("direction")
+                .short('d')
+                .long("direction")
+                .value_name("DIRECTION")
+                .help("Sync direction override: incoming, outgoing, or both")
+                .value_parser(["incoming", "outgoing", "both"])
         )
         .get_matches();
 
@@ -263,10 +307,24 @@ async fn main() -> Result<()> {
         ).await?
     ) as Arc<dyn postero::filesystem::FileSystem>;
 
+    // Parse direction override
+    let direction_override = matches.get_one::<String>("direction").map(|d| {
+        match d.as_str() {
+            "incoming" => DirectionOverride::Incoming,
+            "outgoing" => DirectionOverride::Outgoing,
+            "both" => DirectionOverride::Both,
+            _ => unreachable!(), // clap validates the values
+        }
+    });
+
+    if let Some(ref dir) = direction_override {
+        info!("Direction override: {:?}", dir);
+    }
+
     info!("Starting sync process");
 
     // Run sync
-    if let Err(e) = sync_data(&config, &db, fs).await {
+    if let Err(e) = sync_data(&config, &db, fs, direction_override).await {
         error!("Sync failed: {}", e);
         std::process::exit(1);
     }

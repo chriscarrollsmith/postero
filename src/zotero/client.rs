@@ -135,11 +135,11 @@ impl ZoteroClient {
     pub async fn load_group_local(&self, group_id: i64) -> Result<Library> {
         let query = format!(
             r#"
-            SELECT l.id, l.library_type, l.version, l.created, l.modified, l.data, l.deleted, 
+            SELECT l.id, l.library_type, l.version, l.created, l.modified, l.data, l.deleted,
                    l.item_version, l.collection_version, l.tag_version, l.gitlab,
-                   sl.active, sl.direction, sl.tags
-            FROM {}.libraries l, {}.sync_libraries sl 
-            WHERE l.id = sl.library_id AND l.library_type = sl.library_type 
+                   sl.active, sl.incoming_sync, sl.outgoing_sync, sl.tags
+            FROM {}.libraries l, {}.sync_libraries sl
+            WHERE l.id = sl.library_id AND l.library_type = sl.library_type
                   AND l.id = $1 AND l.library_type = 'group'
             "#,
             self.db_schema, self.db_schema
@@ -157,11 +157,11 @@ impl ZoteroClient {
     pub async fn load_groups_local(&self) -> Result<Vec<Library>> {
         let query = format!(
             r#"
-            SELECT l.id, l.library_type, l.version, l.created, l.modified, l.data, l.deleted, 
+            SELECT l.id, l.library_type, l.version, l.created, l.modified, l.data, l.deleted,
                    l.item_version, l.collection_version, l.tag_version, l.gitlab,
-                   sl.active, sl.direction, sl.tags
-            FROM {}.libraries l, {}.sync_libraries sl 
-            WHERE l.id = sl.library_id AND l.library_type = sl.library_type 
+                   sl.active, sl.incoming_sync, sl.outgoing_sync, sl.tags
+            FROM {}.libraries l, {}.sync_libraries sl
+            WHERE l.id = sl.library_id AND l.library_type = sl.library_type
                   AND l.library_type = 'group'
             ORDER BY l.data->>'name'
             "#,
@@ -178,7 +178,7 @@ impl ZoteroClient {
         Ok(groups)
     }
 
-    pub async fn create_empty_group_local(&self, group_id: i64) -> Result<(bool, super::SyncDirection)> {
+    pub async fn create_empty_group_local(&self, group_id: i64) -> Result<(bool, super::SyncMode)> {
         // First, try to create the basic library record
         let libraries_query = format!(
             r#"
@@ -197,23 +197,15 @@ impl ZoteroClient {
         let was_created = result.rows_affected() > 0;
 
         // Now create or update the sync_libraries entry
-        let direction = super::SyncDirection::ToLocal;
-        let direction_str = match direction {
-            super::SyncDirection::None => "none",
-            super::SyncDirection::ToCloud => "tocloud",
-            super::SyncDirection::ToLocal => "tolocal",
-            super::SyncDirection::BothCloud => "bothcloud",
-            super::SyncDirection::BothLocal => "bothlocal",
-            super::SyncDirection::BothManual => "bothmanual",
-        };
+        // Default: incoming=manual (download from Zotero), outgoing=disabled
+        let incoming_sync = super::SyncMode::Manual;
 
         let sync_libraries_query = format!(
             r#"
-            INSERT INTO {}.sync_libraries (library_id, library_type, active, direction, tags)
-            VALUES ($1, 'group', $2, $3::syncdirection, false)
+            INSERT INTO {}.sync_libraries (library_id, library_type, active, direction, incoming_sync, outgoing_sync, tags)
+            VALUES ($1, 'group', $2, 'tolocal'::syncdirection, 'manual'::syncmode, 'disabled'::syncmode, false)
             ON CONFLICT (library_id, library_type) DO UPDATE SET
-                active = EXCLUDED.active,
-                direction = EXCLUDED.direction
+                active = EXCLUDED.active
             "#,
             self.db_schema
         );
@@ -221,11 +213,10 @@ impl ZoteroClient {
         sqlx::query(&sync_libraries_query)
             .bind(group_id)
             .bind(self.new_group_active)
-            .bind(direction_str)
             .execute(&self.db)
             .await?;
 
-        Ok((was_created, direction))
+        Ok((was_created, incoming_sync))
     }
 
     pub async fn delete_unknown_groups_local(&self, known_groups: &[i64]) -> Result<()> {
@@ -1268,11 +1259,11 @@ impl ZoteroClient {
     pub async fn load_user_local(&self, user_id: i64) -> Result<Library> {
         let query = format!(
             r#"
-            SELECT l.id, l.library_type, l.version, l.created, l.modified, l.data, l.deleted, 
+            SELECT l.id, l.library_type, l.version, l.created, l.modified, l.data, l.deleted,
                    l.item_version, l.collection_version, l.tag_version, l.gitlab,
-                   sl.active, sl.direction, sl.tags
-            FROM {}.libraries l, {}.sync_libraries sl 
-            WHERE l.id = sl.library_id AND l.library_type = sl.library_type 
+                   sl.active, sl.incoming_sync, sl.outgoing_sync, sl.tags
+            FROM {}.libraries l, {}.sync_libraries sl
+            WHERE l.id = sl.library_id AND l.library_type = sl.library_type
                   AND l.id = $1 AND l.library_type = 'user'
             "#,
             self.db_schema, self.db_schema
@@ -1287,7 +1278,7 @@ impl ZoteroClient {
         Library::from_row(&row)
     }
 
-    pub async fn create_empty_user_local(&self, user_id: i64) -> Result<(bool, super::SyncDirection)> {
+    pub async fn create_empty_user_local(&self, user_id: i64) -> Result<(bool, super::SyncMode)> {
         // First, try to create the basic library record
         let libraries_query = format!(
             r#"
@@ -1306,23 +1297,15 @@ impl ZoteroClient {
         let was_created = result.rows_affected() > 0;
 
         // Now create or update the sync_libraries entry
-        let direction = super::SyncDirection::ToLocal;
-        let direction_str = match direction {
-            super::SyncDirection::None => "none",
-            super::SyncDirection::ToCloud => "tocloud",
-            super::SyncDirection::ToLocal => "tolocal",
-            super::SyncDirection::BothCloud => "bothcloud",
-            super::SyncDirection::BothLocal => "bothlocal",
-            super::SyncDirection::BothManual => "bothmanual",
-        };
+        // Default: incoming=manual (download from Zotero), outgoing=disabled
+        let incoming_sync = super::SyncMode::Manual;
 
         let sync_libraries_query = format!(
             r#"
-            INSERT INTO {}.sync_libraries (library_id, library_type, active, direction, tags)
-            VALUES ($1, 'user', $2, $3::syncdirection, false)
+            INSERT INTO {}.sync_libraries (library_id, library_type, active, direction, incoming_sync, outgoing_sync, tags)
+            VALUES ($1, 'user', $2, 'tolocal'::syncdirection, 'manual'::syncmode, 'disabled'::syncmode, false)
             ON CONFLICT (library_id, library_type) DO UPDATE SET
-                active = EXCLUDED.active,
-                direction = EXCLUDED.direction
+                active = EXCLUDED.active
             "#,
             self.db_schema
         );
@@ -1330,11 +1313,10 @@ impl ZoteroClient {
         sqlx::query(&sync_libraries_query)
             .bind(user_id)
             .bind(true) // User libraries are active by default
-            .bind(direction_str)
             .execute(&self.db)
             .await?;
 
-        Ok((was_created, direction))
+        Ok((was_created, incoming_sync))
     }
 
     pub async fn delete_unknown_libraries_local(&self, known_libraries: &[i64]) -> Result<()> {
