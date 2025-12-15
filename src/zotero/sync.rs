@@ -90,7 +90,9 @@ pub enum SyncMode {
     Disabled,
     #[serde(rename = "manual")]
     Manual,
-    // Future: Automatic, OnDemand, EventDriven
+    #[serde(rename = "event_driven")]
+    EventDriven,
+    // Future: Automatic, OnDemand
 }
 
 impl Default for SyncMode {
@@ -104,6 +106,7 @@ impl std::fmt::Display for SyncMode {
         match self {
             SyncMode::Disabled => write!(f, "disabled"),
             SyncMode::Manual => write!(f, "manual"),
+            SyncMode::EventDriven => write!(f, "event_driven"),
         }
     }
 } 

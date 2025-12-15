@@ -220,7 +220,7 @@ impl Library {
     }
 
     pub fn can_upload(&self) -> bool {
-        self.outgoing_sync != SyncMode::Disabled
+        matches!(self.outgoing_sync, SyncMode::Manual | SyncMode::EventDriven)
     }
 
     pub fn can_download(&self) -> bool {

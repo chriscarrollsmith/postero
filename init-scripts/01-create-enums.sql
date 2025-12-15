@@ -46,8 +46,9 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'syncmode') THEN
         CREATE TYPE public.syncmode AS ENUM (
             'disabled',
-            'manual'
-            -- Future: 'automatic', 'on_demand', 'event_driven'
+            'manual',
+            'event_driven'
+            -- Future: 'automatic', 'on_demand'
         );
     END IF;
 END$$; 

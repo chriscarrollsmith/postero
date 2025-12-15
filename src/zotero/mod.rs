@@ -11,6 +11,8 @@ pub mod collection;
 pub mod tag;
 pub mod user;
 pub mod sync;
+pub mod sync_queue;
+pub mod sync_worker;
 
 pub use client::ZoteroClient;
 pub use types::*;
@@ -20,6 +22,8 @@ pub use collection::Collection;
 pub use tag::Tag;
 pub use user::User;
 pub use sync::{SyncDirection, SyncMode, SyncStatus, LibraryType};
+pub use sync_queue::{SyncQueue, SyncQueueEntry, QueueStats};
+pub use sync_worker::{SyncWorker, SyncWorkerConfig};
 
 lazy_static! {
     static ref TEXT_VARIABLES_REGEX: Regex = Regex::new(r#"([a-zA-Z0-9_]+:([^ \n<"]+|"[^"]+"))"#).unwrap();
